@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { fetchAssets, fetchLookups } from '@/services/assetService';
@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Search, Filter, ChevronLeft, ChevronRight, Mail, Send, Loader2, AlertCircle } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useAuth } from '@/contexts/AuthContext';
@@ -17,7 +18,7 @@ import { useToast } from '@/hooks/use-toast';
 import { ASSET_COLUMNS, Asset } from '@/types';
 import ColumnSelector from '@/components/ColumnSelector';
 import { Label } from '@/components/ui/label';
-import { sendVerificationRequest, fetchVerificationCycles, VerificationCycle } from '@/services/verificationService';
+import { sendSelectedAssetsVerification, fetchVerificationCycles, VerificationCycle } from '@/services/verificationService';
 
 const statusColors: Record<string, string> = {
   active: 'bg-success/10 text-success border-success/20',
@@ -63,8 +64,6 @@ export default function AssetsPage() {
     ASSET_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key)
   );
   const [sendRequestOpen, setSendRequestOpen] = useState(false);
-  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
-  const [requestMessage, setRequestMessage] = useState('');
 
   const PAGE_SIZE = 20;
   const isMobile = useIsMobile();
@@ -95,10 +94,44 @@ export default function AssetsPage() {
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const categories: { code: string; name: string }[] = lookups?.categories ?? [];
 
+  // Multi-select state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Reset selection when page/search/filters change
+  useEffect(() => { setSelectedIds(new Set()); }, [page, search, statusFilter, categoryFilter]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === assets.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(assets.map((a) => a.id)));
+    }
+  };
+
+  // Dialog state
+  const [sendAssets, setSendAssets] = useState<Asset[]>([]);
   const [cycleId, setCycleId] = useState('');
   const [sendLoading, setSendLoading] = useState(false);
   const [cycles, setCycles] = useState<VerificationCycle[]>([]);
   const [cyclesLoading, setCyclesLoading] = useState(false);
+
+  // Derive employee info from selected assets for the dialog
+  const dialogEmployeeInfo = useMemo(() => {
+    if (sendAssets.length === 0) return null;
+    const employeeIds = new Set(sendAssets.map((a) => a.assignedTo).filter(Boolean));
+    if (employeeIds.size === 0) return { valid: false, reason: 'None of the selected assets have an assigned employee.' };
+    if (employeeIds.size > 1) return { valid: false, reason: 'Selected assets belong to different employees. All assets in one request must belong to the same employee.' };
+    const first = sendAssets.find((a) => a.assignedTo)!;
+    return { valid: true, employeeId: first.assignedTo, employeeName: first.assignedToName };
+  }, [sendAssets]);
 
   useEffect(() => {
     if (!sendRequestOpen) return;
@@ -112,36 +145,45 @@ export default function AssetsPage() {
       .finally(() => setCyclesLoading(false));
   }, [sendRequestOpen]);
 
-  const handleSendRequest = (asset: Asset) => {
-    setSelectedAsset(asset);
+  const handleSendSingle = (asset: Asset) => {
+    setSendAssets([asset]);
+    setCycleId('');
+    setCycles([]);
+    setSendRequestOpen(true);
+  };
+
+  const handleSendSelected = () => {
+    const selected = assets.filter((a) => selectedIds.has(a.id));
+    if (selected.length === 0) return;
+    setSendAssets(selected);
     setCycleId('');
     setCycles([]);
     setSendRequestOpen(true);
   };
 
   const confirmSendRequest = async () => {
-    if (!selectedAsset) return;
-    if (!selectedAsset.assignedTo) {
-      toast({ title: 'No Employee Assigned', description: 'This asset has no assigned employee to send a verification request to.', variant: 'destructive' });
-      return;
-    }
+    if (!dialogEmployeeInfo?.valid || sendAssets.length === 0) return;
     if (!cycleId) {
       toast({ title: 'Cycle Required', description: 'Please select a verification cycle.', variant: 'destructive' });
       return;
     }
     setSendLoading(true);
     try {
-      await sendVerificationRequest({
+      await sendSelectedAssetsVerification({
         cycle_id: cycleId,
-        employee_id: selectedAsset.assignedTo,
-        location_scope_id: selectedAsset.locationId || undefined,
+        employee_id: dialogEmployeeInfo.employeeId!,
+        asset_ids: sendAssets.map((a) => a.id),
       });
+      const assetLabel = sendAssets.length === 1
+        ? `asset ${sendAssets[0].assetId}`
+        : `${sendAssets.length} assets`;
       toast({
         title: 'Verification Request Sent',
-        description: `Request initiated for ${selectedAsset.assignedToName} regarding asset ${selectedAsset.assetId}.`,
+        description: `Request initiated for ${dialogEmployeeInfo.employeeName} regarding ${assetLabel}.`,
       });
       setSendRequestOpen(false);
-      setSelectedAsset(null);
+      setSendAssets([]);
+      setSelectedIds(new Set());
     } catch (err: any) {
       const detail = err?.response?.data?.detail || 'Failed to create verification request.';
       toast({ title: 'Request Failed', description: detail, variant: 'destructive' });
@@ -155,7 +197,14 @@ export default function AssetsPage() {
     <div className="p-4 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold md:text-2xl">Assets</h1>
-        <span className="text-sm text-muted-foreground">{totalCount.toLocaleString()} assets</span>
+        <div className="flex items-center gap-2">
+          {isAdmin && selectedIds.size > 0 && (
+            <Button size="sm" variant="default" className="gap-1.5" onClick={handleSendSelected}>
+              <Send className="h-3.5 w-3.5" /> Send Verification ({selectedIds.size})
+            </Button>
+          )}
+          <span className="text-sm text-muted-foreground">{totalCount.toLocaleString()} assets</span>
+        </div>
       </div>
 
       <div className="flex flex-col md:flex-row gap-2">
@@ -192,7 +241,15 @@ export default function AssetsPage() {
           {assets.map((asset) => (
             <Card key={asset.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/assets/${asset.id}`)}>
               <CardContent className="p-3">
-                <div className="flex items-start justify-between">
+                <div className="flex items-start gap-2">
+                  {isAdmin && (
+                    <Checkbox
+                      checked={selectedIds.has(asset.id)}
+                      onCheckedChange={() => toggleSelect(asset.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1"
+                    />
+                  )}
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-sm truncate">{asset.name}</p>
                     <p className="text-xs text-muted-foreground">{asset.assetId} · {asset.serialNumber}</p>
@@ -204,8 +261,8 @@ export default function AssetsPage() {
                   </div>
                 </div>
                 {isAdmin && (
-                  <Button size="sm" variant="outline" className="mt-2 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); handleSendRequest(asset); }}>
-                    <Send className="mr-1 h-3 w-3" /> Send Request to Employee
+                  <Button size="sm" variant="outline" className="mt-2 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); handleSendSingle(asset); }}>
+                    <Send className="mr-1 h-3 w-3" /> Send Verification
                   </Button>
                 )}
               </CardContent>
@@ -218,6 +275,14 @@ export default function AssetsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {isAdmin && (
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={assets.length > 0 && selectedIds.size === assets.length}
+                        onCheckedChange={toggleSelectAll}
+                      />
+                    </TableHead>
+                  )}
                   {activeColumnDefs.map((col) => <TableHead key={col.key} className="whitespace-nowrap text-xs">{col.label}</TableHead>)}
                   {isAdmin && <TableHead className="text-xs">Action</TableHead>}
                 </TableRow>
@@ -225,6 +290,15 @@ export default function AssetsPage() {
               <TableBody>
                 {assets.map((asset) => (
                   <TableRow key={asset.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/assets/${asset.id}`)}>
+                    {isAdmin && (
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(asset.id)}
+                          onCheckedChange={() => toggleSelect(asset.id)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </TableCell>
+                    )}
                     {activeColumnDefs.map((col) => (
                       <TableCell key={col.key} className="text-xs whitespace-nowrap">
                         {col.key === 'status' ? (
@@ -236,7 +310,7 @@ export default function AssetsPage() {
                     ))}
                     {isAdmin && (
                       <TableCell>
-                        <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-accent hover:text-accent" onClick={(e) => { e.stopPropagation(); handleSendRequest(asset); }}>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-accent hover:text-accent" onClick={(e) => { e.stopPropagation(); handleSendSingle(asset); }}>
                           <Send className="h-3 w-3" /> Request
                         </Button>
                       </TableCell>
@@ -257,18 +331,38 @@ export default function AssetsPage() {
         </div>
       )}
 
-      <Dialog open={sendRequestOpen} onOpenChange={setSendRequestOpen}>
+      <Dialog open={sendRequestOpen} onOpenChange={(open) => { setSendRequestOpen(open); if (!open) setSendAssets([]); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-accent" /> Send Verification Request</DialogTitle>
           </DialogHeader>
-          {selectedAsset && (
+          {sendAssets.length > 0 && (
             <div className="space-y-4">
               <div className="text-sm space-y-1.5 bg-muted rounded-lg p-3">
-                <p><span className="text-muted-foreground">Asset:</span> {selectedAsset.assetId} — {selectedAsset.name}</p>
-                <p><span className="text-muted-foreground">Employee:</span> {selectedAsset.assignedToName || <span className="text-destructive">No employee assigned</span>}</p>
-                <p><span className="text-muted-foreground">Location:</span> {selectedAsset.locationName}</p>
+                {sendAssets.length === 1 ? (
+                  <p><span className="text-muted-foreground">Asset:</span> {sendAssets[0].assetId} — {sendAssets[0].name}</p>
+                ) : (
+                  <p><span className="text-muted-foreground">Assets:</span> {sendAssets.length} selected</p>
+                )}
+                {dialogEmployeeInfo?.valid ? (
+                  <p><span className="text-muted-foreground">Employee:</span> {dialogEmployeeInfo.employeeName}</p>
+                ) : (
+                  <p className="text-destructive text-xs">{dialogEmployeeInfo?.reason}</p>
+                )}
+                <p><span className="text-muted-foreground">Location:</span> {sendAssets[0].locationName}</p>
               </div>
+
+              {sendAssets.length > 1 && (
+                <div className="max-h-32 overflow-y-auto rounded border p-2 text-xs space-y-1">
+                  {sendAssets.map((a) => (
+                    <div key={a.id} className="flex justify-between">
+                      <span className="font-mono">{a.assetId}</span>
+                      <span className="text-muted-foreground truncate ml-2">{a.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label className="text-sm">Verification Cycle *</Label>
                 {cyclesLoading ? (
@@ -294,17 +388,20 @@ export default function AssetsPage() {
                   </Select>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">A verification request will be created for the assigned employee under the selected cycle.</p>
+              <p className="text-xs text-muted-foreground">
+                This will send a verification email for the selected asset{sendAssets.length > 1 ? 's' : ''} only.
+              </p>
             </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendRequestOpen(false)}>Cancel</Button>
             <Button
               onClick={confirmSendRequest}
-              disabled={sendLoading || !selectedAsset?.assignedTo || !cycleId || cycles.length === 0}
+              disabled={sendLoading || !dialogEmployeeInfo?.valid || !cycleId || cycles.length === 0}
               className="gap-1.5"
             >
-              {sendLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Send Request
+              {sendLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              Send Request{sendAssets.length > 1 ? ` (${sendAssets.length})` : ''}
             </Button>
           </DialogFooter>
         </DialogContent>

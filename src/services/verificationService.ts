@@ -159,7 +159,14 @@ export async function fetchVerificationCycles(params?: { status?: string }): Pro
   return data;
 }
 
-export async function sendVerificationRequest(payload: Record<string, any>) {
-  const { data } = await api.post("/admin/send-verification-request", payload);
+export interface SendSelectedAssetsPayload {
+  cycle_id: string;
+  employee_id: string;
+  asset_ids: string[];
+  location_scope_id?: string;
+}
+
+export async function sendSelectedAssetsVerification(payload: SendSelectedAssetsPayload) {
+  const { data } = await api.post("/verification/requests/send-selected/", payload);
   return data;
 }
