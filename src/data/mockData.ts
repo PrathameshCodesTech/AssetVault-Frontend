@@ -1,4 +1,4 @@
-import { Asset, AssetHistory, DashboardSummary, Location, LocationNode, LocationPath, ThirdPartySubmission, User } from '@/types';
+import { Asset, AssetHistory, DashboardSummary, Location, LocationNode, User } from '@/types';
 
 export const mockUsers: Record<string, User> = {
   'admin@bank.com': {
@@ -6,6 +6,7 @@ export const mockUsers: Record<string, User> = {
     email: 'admin@bank.com',
     name: 'Rajesh Kumar',
     role: 'super_admin',
+    permissions: [],
     avatar: undefined,
   },
   'branch@bank.com': {
@@ -13,6 +14,7 @@ export const mockUsers: Record<string, User> = {
     email: 'branch@bank.com',
     name: 'Priya Sharma',
     role: 'location_admin',
+    permissions: [],
     locationId: 'loc1',
     locationName: 'Mumbai - Main Branch',
   },
@@ -21,15 +23,9 @@ export const mockUsers: Record<string, User> = {
     email: 'employee@bank.com',
     name: 'Amit Patel',
     role: 'employee',
+    permissions: [],
     locationId: 'loc1',
     locationName: 'Mumbai - Main Branch',
-  },
-  'operator@vendor.com': {
-    id: 'u4',
-    email: 'operator@vendor.com',
-    name: 'Suresh Verma',
-    role: 'third_party',
-    assignedLocationIds: ['loc1'],
   },
 };
 
@@ -378,54 +374,3 @@ export const mockDashboardSummary: DashboardSummary = {
   ],
 };
 
-// ---- Third-Party Mock Submissions ----
-export const mockSubmissions: ThirdPartySubmission[] = [
-  {
-    id: 'sub-001',
-    type: 'verification',
-    assetId: 'ast-000001',
-    locationBreadcrumb: sampleBreadcrumbs[0],
-    locationPath: { company: 'comp-1', country: 'cntry-1', region: 'reg-1', zone: 'zone-1', site: 'site-1', entity: 'ent-1', building: 'bldg-1', wing: 'wing-1', area: 'area-1', floor: 'flr-1', unit: 'unit-1', room: 'room-1' },
-    photoUrl: '/placeholder.svg',
-    remarks: 'Asset verified at location.',
-    status: 'approved',
-    submittedBy: 'u4',
-    submittedByName: 'Suresh Verma',
-    submittedAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-    reviewedBy: 'u2',
-    reviewedByName: 'Priya Sharma',
-    reviewedAt: new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString(),
-  },
-  {
-    id: 'sub-002',
-    type: 'new_asset',
-    tempRefId: 'TEMP-REF-0001',
-    assetName: 'Untagged Printer',
-    serialNumber: 'HP-PRN-99812',
-    assetType: 'Office Equipment',
-    locationBreadcrumb: sampleBreadcrumbs[1],
-    locationPath: { company: 'comp-1', country: 'cntry-1', region: 'reg-1', zone: 'zone-1', site: 'site-1', entity: 'ent-1', building: 'bldg-1', wing: 'wing-2', area: 'area-2', floor: 'flr-3', unit: 'unit-4', room: 'room-5' },
-    photoUrl: '/placeholder.svg',
-    remarks: 'Found untagged printer near ATM area.',
-    status: 'pending',
-    submittedBy: 'u4',
-    submittedByName: 'Suresh Verma',
-    submittedAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-  },
-  {
-    id: 'sub-003',
-    type: 'verification',
-    assetId: 'ast-000010',
-    locationBreadcrumb: sampleBreadcrumbs[2],
-    locationPath: { company: 'comp-1', country: 'cntry-1', region: 'reg-2', zone: 'zone-2', site: 'site-2', entity: 'ent-2', building: 'bldg-2', wing: 'wing-3', area: 'area-3', floor: 'flr-4', unit: 'unit-5', room: 'room-7' },
-    photoUrl: '/placeholder.svg',
-    status: 'correction_requested',
-    reviewNotes: 'Photo is blurry, please retake.',
-    submittedBy: 'u4',
-    submittedByName: 'Suresh Verma',
-    submittedAt: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(),
-    reviewedBy: 'u2',
-    reviewedByName: 'Priya Sharma',
-    reviewedAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-  },
-];

@@ -26,7 +26,10 @@ export interface AdminVerificationRequest {
   assetCount: number;
   verifiedCount: number;
   issueCount: number;
+  reportCount: number;
   declarationPresent: boolean;
+  approvedCount: number;
+  correctionCount: number;
 }
 
 export interface VerificationAssetPhoto {
@@ -35,7 +38,11 @@ export interface VerificationAssetPhoto {
   uploaded_at: string;
 }
 
+export type AdminReviewDecision = 'approved' | 'correction_required';
+
 export interface AdminVerificationRequestDetail extends AdminVerificationRequest {
+  review_notes: string | null;
+  employee_reports: EmployeeAssetReport[];
   request_assets: {
     id: string;
     assetId: string;
@@ -49,6 +56,8 @@ export interface AdminVerificationRequestDetail extends AdminVerificationRequest
       response: string;
       remarks: string | null;
       responded_at: string | null;
+      admin_review_status: AdminReviewDecision | 'pending_review';
+      admin_review_note: string | null;
       issue: { issue_type: string; description: string } | null;
     } | null;
   }[];
@@ -164,9 +173,82 @@ export interface SendSelectedAssetsPayload {
   employee_id: string;
   asset_ids: string[];
   location_scope_id?: string;
+  force_resend?: boolean;
 }
 
 export async function sendSelectedAssetsVerification(payload: SendSelectedAssetsPayload) {
   const { data } = await api.post("/verification/requests/send-selected/", payload);
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Employee asset report (missing / misplaced)
+// ---------------------------------------------------------------------------
+
+export interface EmployeeAssetReportPayload {
+  report_type: "missing" | "misplaced" | "unlisted";
+  asset_name: string;
+  asset_id_if_known?: string;
+  serial_number?: string;
+  category_name?: string;
+  location_description?: string;
+  expected_location?: string;
+  remarks?: string;
+}
+
+export interface EmployeeAssetReport {
+  id: string;
+  report_type: string;
+  asset_name: string;
+  asset_id_if_known: string | null;
+  serial_number: string | null;
+  category_name: string | null;
+  location_description: string | null;
+  expected_location: string | null;
+  remarks: string | null;
+  status: string;
+  photos: { id: string; url: string; uploaded_at: string }[];
+  created_at: string;
+}
+
+export async function reportMissingAsset(
+  token: string,
+  payload: EmployeeAssetReportPayload,
+  photos?: File[]
+): Promise<EmployeeAssetReport> {
+  const fd = new FormData();
+  Object.entries(payload).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") fd.append(k, v);
+  });
+  if (photos) {
+    photos.forEach((f) => fd.append("photos", f));
+  }
+  const { data } = await api.post(
+    `/verification/public/${token}/report-asset/`,
+    fd,
+    { headers: { "Content-Type": "multipart/form-data" } }
+  );
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Admin review actions
+// ---------------------------------------------------------------------------
+
+export interface AssetReviewItem {
+  request_asset_id: string;
+  decision: AdminReviewDecision;
+  note?: string;
+}
+
+export async function reviewVerificationRequest(
+  id: string,
+  assetReviews: AssetReviewItem[],
+  reviewNote?: string
+) {
+  const { data } = await api.post(`/verification/requests/${id}/review/`, {
+    asset_reviews: assetReviews,
+    review_note: reviewNote || "",
+  });
   return data;
 }

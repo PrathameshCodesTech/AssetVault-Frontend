@@ -93,6 +93,16 @@ export default function BulkUploadPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
+    const lowerName = f.name.toLowerCase();
+    if (!lowerName.endsWith('.csv') && !lowerName.endsWith('.xlsx')) {
+      toast({
+        title: 'Unsupported File',
+        description: 'Please upload a CSV or XLSX file. Legacy .xls files are not supported.',
+        variant: 'destructive',
+      });
+      e.target.value = '';
+      return;
+    }
     setFile(f);
     setPreview(null);
     setProcessResult(null);
@@ -144,7 +154,7 @@ export default function BulkUploadPage() {
       </div>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Upload CSV / Excel File</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Upload CSV or XLSX File</CardTitle></CardHeader>
         <CardContent className="space-y-4">
           <div
             className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:bg-muted/50 transition-colors"
@@ -158,12 +168,12 @@ export default function BulkUploadPage() {
               </div>
             ) : (
               <>
-                <p className="text-sm font-medium">Click to upload CSV or Excel file</p>
-                <p className="text-xs text-muted-foreground mt-1">Template has {TEMPLATE_HEADERS.length} columns</p>
+                <p className="text-sm font-medium">Click to upload a CSV or XLSX file</p>
+                <p className="text-xs text-muted-foreground mt-1">Template has {TEMPLATE_HEADERS.length} columns. Legacy `.xls` files are not supported.</p>
               </>
             )}
           </div>
-          <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileChange} />
+          <input ref={fileInputRef} type="file" accept=".csv,.xlsx" className="hidden" onChange={handleFileChange} />
 
           {previewMutation.isPending && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Parsing file...</div>
@@ -183,8 +193,11 @@ export default function BulkUploadPage() {
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive mb-2">
                   <AlertTriangle className="h-4 w-4" /> {preview.errors.length} validation error(s)
                 </div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Fix the rows listed below, then upload the file again. Invalid rows will not be processed.
+                </p>
                 {preview.errors.slice(0, 20).map((err, i) => (
-                  <p key={i} className="text-xs text-muted-foreground">Row {err.row}: {err.message}</p>
+                  <p key={i} className="text-xs text-muted-foreground break-words">Row {err.row}: {err.message}</p>
                 ))}
               </CardContent>
             </Card>
@@ -217,7 +230,10 @@ export default function BulkUploadPage() {
                           })}
                           <TableCell>
                             {isInvalid ? (
-                              <span className="flex items-center gap-1"><AlertTriangle className="h-4 w-4 text-destructive" /><span className="text-xs text-destructive truncate max-w-[150px]">{row.error_message}</span></span>
+                              <span className="flex items-start gap-1 max-w-[280px]">
+                                <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                                <span className="text-xs text-destructive whitespace-normal break-words">{row.error_message}</span>
+                              </span>
                             ) : (
                               <CheckCircle2 className="h-4 w-4 text-green-600" />
                             )}
@@ -285,7 +301,7 @@ export default function BulkUploadPage() {
                                     ? <CheckCircle2 className="h-4 w-4 text-green-600" />
                                     : <span className="text-xs text-destructive">{row.status}</span>}
                                 </TableCell>
-                                <TableCell className="text-xs text-destructive max-w-[200px] truncate">{row.error_message || ''}</TableCell>
+                                <TableCell className="text-xs text-destructive max-w-[260px] whitespace-normal break-words">{row.error_message || ''}</TableCell>
                               </TableRow>
                             );
                           })}

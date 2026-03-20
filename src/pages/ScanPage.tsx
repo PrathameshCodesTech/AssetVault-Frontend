@@ -4,13 +4,22 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Camera, Keyboard, QrCode, Printer, ScanLine, AlertCircle, Loader2 } from 'lucide-react';
+import { Camera, Keyboard, QrCode, Printer, ScanLine, AlertCircle, Loader2, Package } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useToast } from '@/hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { scanAsset, fetchAssets, generateQr } from '@/services/assetService';
+import { vendorGlobalScan } from '@/services/vendorService';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function ScanPage() {
+  const { user } = useAuth();
+  const isVendorOnly =
+    (user?.permissions?.includes('vendor.respond') ?? false) &&
+    user?.role !== 'super_admin' &&
+    user?.role !== 'location_admin' &&
+    user?.role !== 'employee';
+
   const [tab, setTab] = useState('scan');
   const [manualCode, setManualCode] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -56,7 +65,53 @@ export default function ScanPage() {
 
   useEffect(() => { return () => { safeStop(); }; }, []);
 
+  const handleVendorScanResult = async (code: string) => {
+    setSearchLoading(true);
+    try {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code);
+      const result = await vendorGlobalScan(isUuid ? { qr_uid: code } : { asset_id: code });
+
+      if (result.matched && result.in_package && result.request_id && result.request_asset_id) {
+        toast({ title: 'Asset Found', description: `${result.asset_id} — ${result.asset_name}` });
+        navigate(`/vendor/requests/${result.request_id}?asset=${result.request_asset_id}`);
+        return;
+      }
+
+      if (result.matched && !result.in_package) {
+        // Asset belongs to an approved/locked request
+        toast({
+          title: 'Request Locked',
+          description: result.detail ?? 'This asset is in a locked request.',
+          variant: 'destructive',
+        });
+        setSearchLoading(false);
+        return;
+      }
+
+      toast({
+        title: 'Asset Not Found',
+        description: result.detail ?? `No active request found for: ${code}`,
+        variant: 'destructive',
+      });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      const httpStatus = err?.response?.status;
+      if (httpStatus === 404 || detail) {
+        toast({
+          title: 'Asset Not Found',
+          description: detail ?? `No asset matched "${code}". Check the ID or QR code and try again.`,
+          variant: 'destructive',
+        });
+      } else {
+        toast({ title: 'Connection Error', description: 'Could not reach the server. Check your connection and try again.', variant: 'destructive' });
+      }
+    }
+    setSearchLoading(false);
+  };
+
   const handleScanResult = async (code: string) => {
+    if (isVendorOnly) { return handleVendorScanResult(code); }
+
     setSearchLoading(true);
     try {
       const asset = await scanAsset(code);
@@ -109,11 +164,18 @@ export default function ScanPage() {
     <div className="p-4 md:p-6 max-w-2xl mx-auto space-y-4">
       <h1 className="text-xl font-bold md:text-2xl">Scan & QR</h1>
 
+      {isVendorOnly && (
+        <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          <Package className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <span>Scan an asset to find it within your assigned verification requests. You can only scan assets included in your active packages.</span>
+        </div>
+      )}
+
       <Tabs value={tab} onValueChange={(v) => { setTab(v); safeStop(); }}>
-        <TabsList className="w-full grid grid-cols-3">
+        <TabsList className={`w-full grid ${isVendorOnly ? 'grid-cols-2' : 'grid-cols-3'}`}>
           <TabsTrigger value="scan"><Camera className="mr-1 h-4 w-4" /> Scan</TabsTrigger>
           <TabsTrigger value="manual"><Keyboard className="mr-1 h-4 w-4" /> Manual</TabsTrigger>
-          <TabsTrigger value="generate"><QrCode className="mr-1 h-4 w-4" /> Generate</TabsTrigger>
+          {!isVendorOnly && <TabsTrigger value="generate"><QrCode className="mr-1 h-4 w-4" /> Generate</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="scan" className="space-y-4">
@@ -158,18 +220,20 @@ export default function ScanPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="generate" className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle className="text-base">Generate QR Code</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">Enter an asset ID to generate its QR code</p>
-              <Input placeholder="e.g. FAR-2021-0001" value={generateId} onChange={(e) => setGenerateId(e.target.value)} className="h-12" />
-              <Button onClick={handleGenerateQr} disabled={qrLoading} className="w-full h-12">
-                {qrLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <QrCode className="mr-2 h-4 w-4" />} Generate QR
-              </Button>
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {!isVendorOnly && (
+          <TabsContent value="generate" className="space-y-4">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Generate QR Code</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-xs text-muted-foreground">Enter an asset ID to generate its QR code</p>
+                <Input placeholder="e.g. FAR-2021-0001" value={generateId} onChange={(e) => setGenerateId(e.target.value)} className="h-12" />
+                <Button onClick={handleGenerateQr} disabled={qrLoading} className="w-full h-12">
+                  {qrLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <QrCode className="mr-2 h-4 w-4" />} Generate QR
+                </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
 
       <Dialog open={qrDialogOpen} onOpenChange={setQrDialogOpen}>

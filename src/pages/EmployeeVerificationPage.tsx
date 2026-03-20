@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
@@ -10,14 +10,18 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 import {
-  ShieldCheck, Package, Check, AlertCircle, Mail, Shield, Clock, Info, ChevronRight,
-  Loader2, ArrowLeft, XCircle, Camera
+  ShieldCheck, Package, Check, AlertCircle, Mail, ChevronRight,
+  Loader2, XCircle, Camera, Plus
 } from 'lucide-react';
 import * as verificationService from '@/services/verificationService';
-import type { AssetResponse, VerificationAssetPhoto } from '@/services/verificationService';
+import type { AssetResponse, VerificationAssetPhoto, EmployeeAssetReport } from '@/services/verificationService';
 
-type VerifyStep = 'loading' | 'email' | 'otp' | 'assets' | 'consent' | 'complete' | 'error';
+// Employee access is link-based — unique public_token is the access credential (no OTP required).
+type VerifyStep = 'loading' | 'welcome' | 'assets' | 'consent' | 'complete' | 'error';
 
 interface VerificationAsset {
   id: string;
@@ -31,18 +35,19 @@ interface VerificationAsset {
   issueType: string;
   photos: VerificationAssetPhoto[];
   photoUploading: boolean;
+  adminReviewStatus: 'pending_review' | 'approved' | 'correction_required';
+  adminReviewNote: string | null;
 }
 
 const STEPS = [
-  { num: '1', label: 'Identify' },
-  { num: '2', label: 'Verify OTP' },
-  { num: '3', label: 'Review Assets' },
-  { num: '4', label: 'Consent' },
+  { num: '1', label: 'Open Link' },
+  { num: '2', label: 'Review Assets' },
+  { num: '3', label: 'Consent' },
   { num: '✓', label: 'Done' },
 ];
 
 const stepIndexMap: Record<VerifyStep, number> = {
-  loading: -1, error: -1, email: 0, otp: 1, assets: 2, consent: 3, complete: 4,
+  loading: -1, error: -1, welcome: 0, assets: 1, consent: 2, complete: 3,
 };
 
 export default function EmployeeVerificationPage() {
@@ -52,18 +57,32 @@ export default function EmployeeVerificationPage() {
 
   const [step, setStep] = useState<VerifyStep>('loading');
   const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
-  const [challengeId, setChallengeId] = useState('');
-  const [debugOtp, setDebugOtp] = useState('');
   const [assets, setAssets] = useState<VerificationAsset[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [agreed, setAgreed] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [employeeName, setEmployeeName] = useState('');
+
   const [requestStatus, setRequestStatus] = useState('');
-  const [countdown, setCountdown] = useState(0);
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Admin review data
+  const [reviewNotes, setReviewNotes] = useState('');
+  const [existingReports, setExistingReports] = useState<EmployeeAssetReport[]>([]);
+
+  // Report missing asset dialog
+  const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [reportForm, setReportForm] = useState({
+    report_type: 'missing' as 'missing' | 'misplaced' | 'unlisted',
+    asset_name: '',
+    asset_id_if_known: '',
+    serial_number: '',
+    category_name: '',
+    location_description: '',
+    expected_location: '',
+    remarks: '',
+  });
+  const [reportPhotos, setReportPhotos] = useState<File[]>([]);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
 
   const { data: requestData, error: fetchError } = useQuery({
     queryKey: ['publicVerification', publicToken],
@@ -80,10 +99,10 @@ export default function EmployeeVerificationPage() {
     if (requestData) {
       setEmployeeName(requestData.employeeName || requestData.employee_name || '');
       setEmail(requestData.employeeEmail || requestData.employee_email || '');
-      const status = requestData.status || '';
+const status = requestData.status || '';
       setRequestStatus(status);
 
-      if (status === 'submitted' || status === 'completed') {
+      if (status === 'submitted' || status === 'completed' || status === 'approved') {
         setStep('complete');
         return;
       }
@@ -93,96 +112,39 @@ export default function EmployeeVerificationPage() {
         return;
       }
 
-      const rawAssets = requestData.assets || requestData.request_assets || [];
-      setAssets(rawAssets.map((a: any) => ({
-        id: a.id || a.request_asset_id,
-        assetId: a.assetId || a.asset_id || '',
-        name: a.name || a.assetName || a.asset_name || '',
-        serialNumber: a.serialNumber || a.serial_number || '',
-        categoryName: a.categoryName || a.category_name || '',
-        locationName: a.locationName || a.location_name || '',
-        status: (a.response?.response === 'verified' ? 'verified' : a.response?.response === 'issue_reported' ? 'issue' : 'pending') as 'pending' | 'verified' | 'issue',
-        note: a.response?.remarks || '',
-        issueType: a.response?.issue?.issue_type || '',
-        photos: Array.isArray(a.photos) ? a.photos : [],
-        photoUploading: false,
-      })));
+      setReviewNotes(requestData.review_notes || '');
+      setExistingReports(requestData.employee_reports || []);
 
-      if (status === 'otp_verified' || status === 'OTP_VERIFIED') {
-        setStep('assets');
-      } else {
-        setStep('email');
-      }
+      const rawAssets = requestData.assets || requestData.request_assets || [];
+      const isCorrection = status === 'correction_requested';
+      setAssets(rawAssets.map((a: any) => {
+        const adminReviewStatus: 'pending_review' | 'approved' | 'correction_required' =
+          a.response?.admin_review_status || 'pending_review';
+        // In correction mode: reset correction_required assets to pending so employee re-reviews them
+        const resolvedStatus = isCorrection && adminReviewStatus === 'correction_required'
+          ? 'pending'
+          : (a.response?.response === 'verified' ? 'verified' : a.response?.response === 'issue_reported' ? 'issue' : 'pending') as 'pending' | 'verified' | 'issue';
+        return {
+          id: a.id || a.request_asset_id,
+          assetId: a.assetId || a.asset_id || '',
+          name: a.name || a.assetName || a.asset_name || '',
+          serialNumber: a.serialNumber || a.serial_number || '',
+          categoryName: a.categoryName || a.category_name || '',
+          locationName: a.locationName || a.location_name || '',
+          status: resolvedStatus,
+          note: a.response?.remarks || '',
+          issueType: a.response?.issue?.issue_type || '',
+          photos: Array.isArray(a.photos) ? a.photos : [],
+          photoUploading: false,
+          adminReviewStatus,
+          adminReviewNote: a.response?.admin_review_note || null,
+        };
+      }));
+
+      // Link-based access: go directly to welcome screen regardless of status
+      setStep('welcome');
     }
   }, [requestData, fetchError]);
-
-  useEffect(() => {
-    if (countdown > 0) {
-      const t = setTimeout(() => setCountdown(countdown - 1), 1000);
-      return () => clearTimeout(t);
-    }
-  }, [countdown]);
-
-  const handleSendOtp = async () => {
-    if (!publicToken) return;
-    setIsLoading(true);
-    setErrorMsg('');
-    try {
-      const resp = await verificationService.sendPublicOtp(publicToken);
-      setChallengeId(resp.challenge_id);
-      if (resp.debug_otp) setDebugOtp(resp.debug_otp);
-      setCountdown(60);
-      setStep('otp');
-      toast({ title: 'OTP Sent', description: `Code sent to ${email}` });
-    } catch (err: any) {
-      setErrorMsg(err?.response?.data?.detail || 'Failed to send OTP.');
-    }
-    setIsLoading(false);
-  };
-
-  const handleOtpChange = (index: number, value: string) => {
-    if (!/^\d*$/.test(value)) return;
-    const newOtp = [...otp];
-    newOtp[index] = value.slice(-1);
-    setOtp(newOtp);
-    if (value && index < 5) inputRefs.current[index + 1]?.focus();
-  };
-
-  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) inputRefs.current[index - 1]?.focus();
-  };
-
-  const handleVerifyOtp = async () => {
-    if (!publicToken) return;
-    const code = otp.join('');
-    if (code.length < 6) return;
-    setIsLoading(true);
-    setErrorMsg('');
-    try {
-      await verificationService.verifyPublicOtp(publicToken, challengeId, code);
-      setStep('assets');
-      toast({ title: 'OTP Verified', description: 'You can now review your assets.' });
-    } catch (err: any) {
-      setErrorMsg(err?.response?.data?.detail || 'Invalid OTP.');
-      setOtp(['', '', '', '', '', '']);
-      inputRefs.current[0]?.focus();
-    }
-    setIsLoading(false);
-  };
-
-  const handleResendOtp = async () => {
-    if (countdown > 0 || !publicToken) return;
-    setIsLoading(true);
-    try {
-      const resp = await verificationService.sendPublicOtp(publicToken);
-      setChallengeId(resp.challenge_id);
-      if (resp.debug_otp) setDebugOtp(resp.debug_otp);
-      setCountdown(60);
-      setOtp(['', '', '', '', '', '']);
-      toast({ title: 'OTP Resent', description: 'A new code has been sent.' });
-    } catch { /* ignore */ }
-    setIsLoading(false);
-  };
 
   const handleAssetStatus = (id: string, status: 'verified' | 'issue') => {
     setAssets((prev) => prev.map((a) => a.id === id ? { ...a, status } : a));
@@ -223,14 +185,42 @@ export default function EmployeeVerificationPage() {
     }
   };
 
-  const allReviewed = assets.every((a) => a.status !== 'pending');
+  const handleReportSubmit = async () => {
+    if (!publicToken || !reportForm.asset_name.trim()) return;
+    setReportSubmitting(true);
+    try {
+      const result = await verificationService.reportMissingAsset(publicToken, reportForm, reportPhotos);
+      setExistingReports((prev) => [result, ...prev]);
+      setReportDialogOpen(false);
+      setReportForm({ report_type: 'missing', asset_name: '', asset_id_if_known: '', serial_number: '', category_name: '', location_description: '', expected_location: '', remarks: '' });
+      setReportPhotos([]);
+      toast({ title: 'Report Submitted', description: `"${result.asset_name}" has been reported.` });
+    } catch (err: any) {
+      toast({ title: 'Report Failed', description: err?.response?.data?.detail || 'Could not submit report.', variant: 'destructive' });
+    }
+    setReportSubmitting(false);
+  };
+
+  const isCorrection = requestStatus === 'correction_requested';
+  // In correction mode only correction_required assets need to be reviewed
+  const editableAssets = isCorrection
+    ? assets.filter((a) => a.adminReviewStatus === 'correction_required')
+    : assets;
+  const allReviewed = editableAssets.every((a) => a.status !== 'pending');
   const verifiedCount = assets.filter((a) => a.status === 'verified').length;
   const issueCount = assets.filter((a) => a.status === 'issue').length;
+  const approvedCount = assets.filter((a) => a.adminReviewStatus === 'approved').length;
+  const correctionRequiredCount = assets.filter((a) => a.adminReviewStatus === 'correction_required').length;
 
   const submitMutation = useMutation({
     mutationFn: () => {
       if (!publicToken) throw new Error('No token');
-      const responses: AssetResponse[] = assets.map((a) => ({
+      // In correction mode only send responses for correction_required assets;
+      // already-approved assets are protected server-side too.
+      const assetsToSubmit = isCorrection
+        ? assets.filter((a) => a.adminReviewStatus === 'correction_required')
+        : assets;
+      const responses: AssetResponse[] = assetsToSubmit.map((a) => ({
         request_asset_id: a.id,
         response: a.status === 'verified' ? 'verified' : 'issue_reported',
         remarks: a.note || undefined,
@@ -255,8 +245,6 @@ export default function EmployeeVerificationPage() {
   const handleSubmit = () => submitMutation.mutate();
 
   const currentStepIndex = stepIndexMap[step] ?? -1;
-
-  const selectedAsset = assets.find((a) => a.id === selectedAssetId);
 
   if (step === 'loading') {
     return (
@@ -312,80 +300,42 @@ export default function EmployeeVerificationPage() {
       {/* Content */}
       <div className="p-4 max-w-lg mx-auto">
         <AnimatePresence mode="wait">
-          {/* Email Step */}
-          {step === 'email' && (
-            <motion.div key="email" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
+          {/* Welcome Step — link-based access, no OTP required */}
+          {step === 'welcome' && (
+            <motion.div key="welcome" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
               <Card>
                 <CardContent className="p-6 space-y-4">
                   <div className="text-center">
-                    <Mail className="h-10 w-10 text-primary mx-auto mb-2" />
-                    <h2 className="text-lg font-bold">Verify Your Identity</h2>
+                    <ShieldCheck className="h-10 w-10 text-primary mx-auto mb-2" />
+                    <h2 className="text-lg font-bold">
+                      {isCorrection ? 'Correction Required' : 'Asset Verification'}
+                    </h2>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {employeeName ? `Hello ${employeeName}, we` : 'We'} will send a verification code to your registered email.
+                      {employeeName ? `Hello ${employeeName}` : 'Hello'} — please review and confirm your assigned assets below.
                     </p>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Email Address</label>
-                    <div className="relative">
-                      <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        type="email"
-                        value={email}
-                        readOnly
-                        className="pl-9 bg-muted"
-                      />
+                  {isCorrection && (
+                    <div className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm space-y-1">
+                      <p className="font-medium text-warning flex items-center gap-1"><AlertCircle className="h-4 w-4" /> Some assets require correction</p>
+                      {(approvedCount > 0 || correctionRequiredCount > 0) && (
+                        <p className="text-muted-foreground text-xs">
+                          {approvedCount > 0 && `${approvedCount} approved · `}{correctionRequiredCount > 0 && `${correctionRequiredCount} need your action`}
+                        </p>
+                      )}
+                      {reviewNotes && <p className="text-muted-foreground text-xs">{reviewNotes}</p>}
                     </div>
+                  )}
+                  <div className="bg-muted rounded-lg p-3 text-sm space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="text-muted-foreground">{email}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{assets.length} asset(s) to review</p>
                   </div>
                   {errorMsg && <p className="text-sm text-destructive">{errorMsg}</p>}
-                  <Button onClick={handleSendOtp} disabled={isLoading} className="w-full h-12 text-base">
-                    {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ChevronRight className="mr-2 h-4 w-4" />}
-                    Send Verification Code
+                  <Button onClick={() => setStep('assets')} className="w-full h-12 text-base">
+                    Start Verification <ChevronRight className="ml-2 h-4 w-4" />
                   </Button>
-                </CardContent>
-              </Card>
-            </motion.div>
-          )}
-
-          {/* OTP Step */}
-          {step === 'otp' && (
-            <motion.div key="otp" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
-              <Card>
-                <CardContent className="p-6 space-y-4">
-                  <div className="text-center">
-                    <Shield className="h-10 w-10 text-primary mx-auto mb-2" />
-                    <h2 className="text-lg font-bold">Enter Verification Code</h2>
-                    <p className="text-sm text-muted-foreground mt-1">Code sent to {email}</p>
-                  </div>
-                  <div className="flex justify-center gap-2">
-                    {otp.map((digit, i) => (
-                      <Input
-                        key={i}
-                        ref={(el) => { inputRefs.current[i] = el; }}
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handleOtpChange(i, e.target.value)}
-                        onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                        className="h-14 w-12 text-center text-xl font-bold border-2 focus:border-primary"
-                        autoFocus={i === 0}
-                      />
-                    ))}
-                  </div>
-                  {errorMsg && <p className="text-center text-sm text-destructive">{errorMsg}</p>}
-                  {debugOtp && <p className="text-center text-xs text-muted-foreground">Dev OTP: <span className="font-mono font-bold">{debugOtp}</span></p>}
-                  <Button onClick={handleVerifyOtp} disabled={otp.join('').length < 6 || isLoading} className="w-full h-12 text-base">
-                    {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
-                    Verify Code
-                  </Button>
-                  <div className="flex items-center justify-between text-sm">
-                    <button onClick={() => { setStep('email'); setErrorMsg(''); }} className="text-primary hover:underline font-semibold">
-                      &larr; Change email
-                    </button>
-                    <button onClick={handleResendOtp} disabled={countdown > 0} className={`font-semibold ${countdown > 0 ? 'text-muted-foreground' : 'text-primary hover:underline'}`}>
-                      {countdown > 0 ? `Resend in ${countdown}s` : 'Resend Code'}
-                    </button>
-                  </div>
                 </CardContent>
               </Card>
             </motion.div>
@@ -399,14 +349,35 @@ export default function EmployeeVerificationPage() {
                 <p className="text-sm text-muted-foreground">{employeeName ? `${employeeName}, please` : 'Please'} confirm each asset below.</p>
               </div>
 
+              {(requestStatus === 'rejected' || requestStatus === 'correction_requested') && (
+                <Card className="border-warning/40 bg-warning/5">
+                  <CardContent className="p-3 text-sm space-y-1">
+                    <p className="font-medium text-warning flex items-center gap-1"><AlertCircle className="h-4 w-4" /> Returned for Correction</p>
+                    {isCorrection && (approvedCount > 0 || correctionRequiredCount > 0) && (
+                      <p className="text-muted-foreground text-xs">
+                        {approvedCount > 0 && `${approvedCount} asset(s) approved · `}
+                        {correctionRequiredCount > 0 && `${correctionRequiredCount} asset(s) require correction`}
+                      </p>
+                    )}
+                    {reviewNotes && <p className="text-muted-foreground">{reviewNotes}</p>}
+                  </CardContent>
+                </Card>
+              )}
+
               <div className="flex items-center justify-between text-sm bg-muted rounded-lg p-3">
-                <span>Reviewed: {verifiedCount + issueCount} / {assets.length}</span>
+                {isCorrection
+                  ? <span>Corrected: {editableAssets.filter((a) => a.status !== 'pending').length} / {correctionRequiredCount}</span>
+                  : <span>Reviewed: {verifiedCount + issueCount} / {assets.length}</span>
+                }
                 {issueCount > 0 && <span className="text-destructive font-medium">{issueCount} issue(s)</span>}
               </div>
 
               <div className="space-y-2">
-                {assets.map((asset) => (
-                  <Card key={asset.id} className={`border-2 transition-colors ${asset.status === 'verified' ? 'border-success/40 bg-success/5' : asset.status === 'issue' ? 'border-destructive/40 bg-destructive/5' : 'border-border'}`}>
+                {assets.map((asset) => {
+                  const isApproved = isCorrection && asset.adminReviewStatus === 'approved';
+                  const needsCorrection = isCorrection && asset.adminReviewStatus === 'correction_required';
+                  return (
+                  <Card key={asset.id} className={`border-2 transition-colors ${isApproved ? 'border-success/40 bg-success/5 opacity-80' : asset.status === 'verified' ? 'border-success/40 bg-success/5' : asset.status === 'issue' ? 'border-destructive/40 bg-destructive/5' : needsCorrection ? 'border-warning/40 bg-warning/5' : 'border-border'}`}>
                     <CardContent className="p-4 space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -416,16 +387,36 @@ export default function EmployeeVerificationPage() {
                             <p className="text-xs text-muted-foreground">{asset.assetId} · {asset.serialNumber}</p>
                           </div>
                         </div>
-                        {asset.status !== 'pending' && (
+                        {isApproved ? (
+                          <div className="text-xs font-medium px-2 py-1 rounded bg-success/10 text-success flex items-center gap-1">
+                            <Check className="h-3 w-3" /> Approved
+                          </div>
+                        ) : needsCorrection && asset.status === 'pending' ? (
+                          <div className="text-xs font-medium px-2 py-1 rounded bg-warning/10 text-warning flex items-center gap-1">
+                            <AlertCircle className="h-3 w-3" /> Needs Correction
+                          </div>
+                        ) : asset.status !== 'pending' ? (
                           <div className={`text-xs font-medium px-2 py-1 rounded ${asset.status === 'verified' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
                             {asset.status === 'verified' ? 'Verified' : 'Issue'}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {asset.categoryName && <span className="mr-3">{asset.categoryName}</span>}
                         {asset.locationName && <span>{asset.locationName}</span>}
                       </div>
+                      {/* Admin correction note */}
+                      {needsCorrection && asset.adminReviewNote && (
+                        <div className="flex items-start gap-1.5 text-xs text-warning bg-warning/10 rounded p-2">
+                          <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+                          <span><span className="font-medium">Admin note:</span> {asset.adminReviewNote}</span>
+                        </div>
+                      )}
+                      {/* Approved read-only label */}
+                      {isApproved ? (
+                        <p className="text-xs text-muted-foreground italic">This asset has been approved and is locked.</p>
+                      ) : (
+                      <>
                       <div className="flex gap-2">
                         <Button
                           variant={asset.status === 'verified' ? 'default' : 'outline'}
@@ -460,6 +451,8 @@ export default function EmployeeVerificationPage() {
                             className="text-sm"
                           />
                         </div>
+                      )}
+                      </>
                       )}
 
                       {/* Photo upload — up to 3 photos per asset */}
@@ -507,8 +500,32 @@ export default function EmployeeVerificationPage() {
                       </div>
                     </CardContent>
                   </Card>
-                ))}
+                  );
+                })}
               </div>
+
+              {/* Existing reports */}
+              {existingReports.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-muted-foreground">Reported Assets ({existingReports.length})</p>
+                  {existingReports.map((r) => (
+                    <Card key={r.id} className="border border-warning/30 bg-warning/5">
+                      <CardContent className="p-3 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">{r.asset_name}</span>
+                          <Badge variant="outline" className="text-[10px] capitalize">{r.report_type}</Badge>
+                        </div>
+                        {r.remarks && <p className="text-xs text-muted-foreground mt-1">{r.remarks}</p>}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {/* Report missing / misplaced button */}
+              <Button variant="outline" onClick={() => setReportDialogOpen(true)} className="w-full h-10 text-sm gap-1.5 border-dashed">
+                <Plus className="h-4 w-4" /> Report Missing / Misplaced Asset
+              </Button>
 
               <Button onClick={() => setStep('consent')} disabled={!allReviewed} className="w-full h-12 text-base">
                 Continue to Declaration <ChevronRight className="ml-2 h-4 w-4" />
@@ -522,7 +539,7 @@ export default function EmployeeVerificationPage() {
               <Card>
                 <CardContent className="p-6 space-y-4">
                   <div className="text-center">
-                    <Shield className="h-10 w-10 text-primary mx-auto mb-2" />
+                    <ShieldCheck className="h-10 w-10 text-primary mx-auto mb-2" />
                     <h2 className="text-lg font-bold">Declaration & Consent</h2>
                   </div>
 
@@ -546,7 +563,7 @@ export default function EmployeeVerificationPage() {
 
                   <div className="flex gap-2">
                     <Button variant="outline" onClick={() => setStep('assets')} className="flex-1">
-                      <ArrowLeft className="mr-2 h-4 w-4" /> Back
+                      <ChevronRight className="mr-2 h-4 w-4 rotate-180" /> Back
                     </Button>
                     <Button onClick={handleSubmit} disabled={!agreed || submitMutation.isPending} className="flex-1">
                       {submitMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
@@ -568,8 +585,10 @@ export default function EmployeeVerificationPage() {
                   </div>
                   <h2 className="text-xl font-bold">Verification Complete</h2>
                   <p className="text-sm text-muted-foreground">
-                    {requestStatus === 'submitted' || requestStatus === 'completed'
-                      ? 'This verification has already been submitted.'
+                    {requestStatus === 'approved'
+                      ? 'This verification has been approved by your administrator.'
+                      : requestStatus === 'submitted' || requestStatus === 'completed'
+                      ? 'This verification has already been submitted and is awaiting review.'
                       : 'Your asset verification has been submitted successfully. You may close this page.'}
                   </p>
                   {assets.length > 0 && (
@@ -584,6 +603,85 @@ export default function EmployeeVerificationPage() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* Report missing/misplaced asset dialog */}
+      <Dialog open={reportDialogOpen} onOpenChange={setReportDialogOpen}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><AlertCircle className="h-5 w-5 text-warning" /> Report Missing / Misplaced Asset</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-sm">Report Type *</Label>
+              <Select value={reportForm.report_type} onValueChange={(v: any) => setReportForm((p) => ({ ...p, report_type: v }))}>
+                <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="missing">Missing Asset</SelectItem>
+                  <SelectItem value="misplaced">Misplaced Asset</SelectItem>
+                  <SelectItem value="unlisted">Unlisted / Extra Asset Found</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">Asset Name *</Label>
+              <Input placeholder="e.g. Dell Latitude Laptop" value={reportForm.asset_name} onChange={(e) => setReportForm((p) => ({ ...p, asset_name: e.target.value }))} className="text-sm" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label className="text-sm">Asset ID (if known)</Label>
+                <Input placeholder="e.g. AST-12345" value={reportForm.asset_id_if_known} onChange={(e) => setReportForm((p) => ({ ...p, asset_id_if_known: e.target.value }))} className="text-sm" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm">Serial Number</Label>
+                <Input placeholder="e.g. SN123456" value={reportForm.serial_number} onChange={(e) => setReportForm((p) => ({ ...p, serial_number: e.target.value }))} className="text-sm" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">Category / Type</Label>
+              <Input placeholder="e.g. Laptop, Furniture, Monitor" value={reportForm.category_name} onChange={(e) => setReportForm((p) => ({ ...p, category_name: e.target.value }))} className="text-sm" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label className="text-sm">Where Found</Label>
+                <Input placeholder="Current location" value={reportForm.location_description} onChange={(e) => setReportForm((p) => ({ ...p, location_description: e.target.value }))} className="text-sm" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm">Expected Location</Label>
+                <Input placeholder="Where it should be" value={reportForm.expected_location} onChange={(e) => setReportForm((p) => ({ ...p, expected_location: e.target.value }))} className="text-sm" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">Remarks</Label>
+              <Textarea placeholder="Any additional details..." value={reportForm.remarks} onChange={(e) => setReportForm((p) => ({ ...p, remarks: e.target.value }))} rows={2} className="text-sm" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">Photos (up to 5)</Label>
+              <div className="flex gap-1.5 flex-wrap">
+                {reportPhotos.map((f, i) => (
+                  <div key={i} className="relative">
+                    <img src={URL.createObjectURL(f)} alt="" className="h-14 w-14 rounded object-cover border" />
+                    <button onClick={() => setReportPhotos((p) => p.filter((_, j) => j !== i))} className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full h-4 w-4 text-[10px] flex items-center justify-center">×</button>
+                  </div>
+                ))}
+              </div>
+              {reportPhotos.length < 5 && (
+                <label className="cursor-pointer">
+                  <input type="file" accept="image/*" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; if (f) setReportPhotos((p) => [...p, f]); e.target.value = ''; }} />
+                  <span className="inline-flex items-center gap-1.5 text-xs border rounded px-2 py-1 hover:bg-muted transition-colors">
+                    <Camera className="h-3 w-3" /> Add Photo
+                  </span>
+                </label>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReportDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleReportSubmit} disabled={reportSubmitting || !reportForm.asset_name.trim()} className="gap-1.5">
+              {reportSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Submit Report
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

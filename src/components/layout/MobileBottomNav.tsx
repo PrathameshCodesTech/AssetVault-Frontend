@@ -8,12 +8,13 @@ export default function MobileBottomNav() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const isThirdParty = user?.role === 'third_party';
+  const isAdminRole = user?.role === 'super_admin' || user?.role === 'location_admin';
+  const isVendorOnly = (user?.permissions?.includes('vendor.respond') ?? false) && !isAdminRole;
 
-  const tabs = isThirdParty
+  const tabs = isVendorOnly
     ? [
-        { label: 'Scan', icon: ScanLine, path: '/scan' },
-        { label: 'Submissions', icon: ClipboardList, path: '/submissions' },
+        { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
+        { label: 'My Requests', icon: ClipboardList, path: '/vendor/requests' },
         { label: 'Profile', icon: UserCircle, path: '/profile' },
       ]
     : [

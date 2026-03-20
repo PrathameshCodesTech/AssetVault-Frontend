@@ -16,6 +16,7 @@ export interface AssetListParams {
   reconciliation_status?: string;
   location_id?: string;
   assigned_to?: string;
+  is_mapped?: string;
   entity?: string;
   ordering?: string;
 }
@@ -56,7 +57,7 @@ export async function fetchAssetHistory(id: string) {
   return data as any[];
 }
 
-export async function assignAsset(id: string, payload: { user_id: string; note?: string }) {
+export async function assignAsset(id: string, payload: { user_id: string; note?: string; force_reassign?: boolean }) {
   const { data } = await api.post(`/assets/${id}/assign/`, payload);
   return data;
 }

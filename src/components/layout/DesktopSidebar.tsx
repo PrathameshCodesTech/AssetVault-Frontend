@@ -1,5 +1,6 @@
 import {
-  LayoutDashboard, Package, ScanLine, FileText, UserCircle, Upload, PlusCircle, ClipboardCheck, Shield, ClipboardList, ShieldCheck,
+  LayoutDashboard, Package, ScanLine, FileText, UserCircle, Upload, PlusCircle, ClipboardCheck, ClipboardList, ShieldCheck,
+  Users, Database, MapPin, CalendarRange, Building2, Truck,
 } from 'lucide-react';
 
 import { NavLink } from '@/components/NavLink';
@@ -14,11 +15,14 @@ export default function DesktopSidebar() {
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const role = user?.role;
-  const isThirdParty = role === 'third_party';
+  const isAdminRole = role === 'super_admin' || role === 'location_admin';
+  const isVendorUser = user?.permissions?.includes('vendor.respond') ?? false;
+  const isVendorOnly = isVendorUser && !isAdminRole;
 
-  const thirdPartyItems = [
-    { title: 'Scan / Verify', url: '/scan', icon: ScanLine },
-    { title: 'My Submissions', url: '/submissions', icon: ClipboardList },
+  const vendorItems = [
+    { title: 'Dashboard', url: '/', icon: LayoutDashboard },
+    { title: 'My Requests', url: '/vendor/requests', icon: ClipboardList },
+    { title: 'Scan', url: '/scan', icon: ScanLine },
   ];
 
   const mainItems = [
@@ -33,7 +37,17 @@ export default function DesktopSidebar() {
     { title: 'Register Asset', url: '/assets/register', icon: PlusCircle },
     { title: 'Bulk Upload', url: '/assets/upload', icon: Upload },
     { title: 'Reports', url: '/reports', icon: FileText },
-    { title: 'Submissions Review', url: '/admin/submissions', icon: ClipboardList },
+    { title: 'Employee Requests', url: '/admin/verification-review', icon: ShieldCheck },
+    { title: 'Vendor Requests', url: '/admin/vendor-requests', icon: Truck },
+  ];
+
+  const setupItems = [
+    { title: 'Users', url: '/admin/users', icon: Users },
+    { title: 'Roles & Permissions', url: '/admin/roles', icon: ShieldCheck },
+    { title: 'Lookups', url: '/admin/lookups', icon: Database },
+    { title: 'Locations', url: '/admin/locations', icon: MapPin },
+    { title: 'Verification Cycles', url: '/admin/verification-cycles', icon: CalendarRange },
+    { title: 'Vendors', url: '/admin/vendors', icon: Building2 },
   ];
 
   const settingsItems = [
@@ -44,7 +58,7 @@ export default function DesktopSidebar() {
     <SidebarMenu>
       {items.map((item) => (
         <SidebarMenuItem key={item.url}>
-          <SidebarMenuButton asChild>
+          <SidebarMenuButton asChild tooltip={item.title}>
             <NavLink to={item.url} end={item.url === '/'} className="hover:bg-sidebar-accent font-body" activeClassName="bg-sidebar-accent text-sidebar-primary font-medium">
               <item.icon className="mr-2 h-4 w-4" />
               {!collapsed && <span>{item.title}</span>}
@@ -66,7 +80,7 @@ export default function DesktopSidebar() {
             <div>
               <h2 className="text-sm font-bold text-sidebar-foreground font-display tracking-wide">Asset Vault</h2>
               <p className="text-[10px] text-sidebar-foreground/50 font-body">
-                {isThirdParty ? 'Field Operator' : 'Asset Management'}
+                {isVendorOnly ? 'Vendor Portal' : 'Asset Management'}
               </p>
             </div>
           )}
@@ -74,11 +88,11 @@ export default function DesktopSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        {isThirdParty ? (
+        {isVendorOnly ? (
           <SidebarGroup>
-            <SidebarGroupLabel className="font-body text-[10px] tracking-widest uppercase">Field Operations</SidebarGroupLabel>
+            <SidebarGroupLabel className="font-body text-[10px] tracking-widest uppercase">Vendor Portal</SidebarGroupLabel>
             <SidebarGroupContent>
-              {renderMenuItems(thirdPartyItems)}
+              {renderMenuItems(vendorItems)}
             </SidebarGroupContent>
           </SidebarGroup>
         ) : (
@@ -90,11 +104,29 @@ export default function DesktopSidebar() {
               </SidebarGroupContent>
             </SidebarGroup>
 
+            {isVendorUser && (
+              <SidebarGroup>
+                <SidebarGroupLabel className="font-body text-[10px] tracking-widest uppercase">Vendor Portal</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  {renderMenuItems(vendorItems)}
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
+
             {(role === 'super_admin' || role === 'location_admin') && (
               <SidebarGroup>
                 <SidebarGroupLabel className="font-body text-[10px] tracking-widest uppercase">Administration</SidebarGroupLabel>
                 <SidebarGroupContent>
                   {renderMenuItems(adminItems)}
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
+
+            {role === 'super_admin' && (
+              <SidebarGroup>
+                <SidebarGroupLabel className="font-body text-[10px] tracking-widest uppercase">Setup</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  {renderMenuItems(setupItems)}
                 </SidebarGroupContent>
               </SidebarGroup>
             )}

@@ -1,4 +1,4 @@
-import type { User, Asset, AssetHistory, DashboardSummary, ThirdPartySubmission } from "@/types";
+import type { User, Asset, AssetHistory, DashboardSummary } from "@/types";
 
 function snakeToCamel(s: string): string {
   return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -19,6 +19,7 @@ export function mapBackendUser(raw: any): User {
     email: raw.email,
     name: raw.name ?? raw.email,
     role: raw.role ?? 'employee',
+    permissions: raw.permission_codes ?? [],
     locationId: raw.locationId ?? undefined,
     locationName: raw.locationName ?? undefined,
     assignedLocationIds: raw.assignedLocationIds ?? undefined,
@@ -62,6 +63,14 @@ export function mapBackendAsset(raw: any): Asset {
     updatedAt: raw.updatedAt ?? "",
     assetDetails: mapKeys(raw.assetDetails) as any,
     wfhDetails: raw.wfhDetails ?? undefined,
+    vendorRequestId: raw.vendorRequestId ?? undefined,
+    vendorRequestReference: raw.vendorRequestReference ?? undefined,
+    vendorRequestStatus: raw.vendorRequestStatus ?? undefined,
+    vendorName: raw.vendorName ?? undefined,
+    workflowType: raw.workflowType ?? undefined,
+    workflowStatus: raw.workflowStatus ?? undefined,
+    workflowReference: raw.workflowReference ?? undefined,
+    workflowDisplay: raw.workflowDisplay ?? undefined,
   };
 }
 
@@ -91,26 +100,3 @@ export function mapDashboardSummary(raw: any): DashboardSummary {
   };
 }
 
-export function mapBackendSubmission(raw: any): ThirdPartySubmission {
-  return {
-    id: raw.id,
-    type: raw.type === "verification" ? "verification" : "new_asset",
-    assetId: raw.assetId ?? undefined,
-    tempRefId: raw.tempRefId ?? undefined,
-    assetName: raw.assetName ?? undefined,
-    serialNumber: raw.serialNumber ?? undefined,
-    assetType: raw.assetType ?? undefined,
-    locationBreadcrumb: raw.locationBreadcrumb ?? "",
-    locationPath: raw.locationPath ?? {},
-    photoUrl: raw.photoUrl ?? "",
-    remarks: raw.remarks ?? undefined,
-    status: raw.status ?? "pending",
-    submittedBy: raw.submittedBy ?? "",
-    submittedByName: raw.submittedByName ?? "",
-    submittedAt: raw.submittedAt ?? "",
-    reviewedBy: raw.reviewedBy ?? undefined,
-    reviewedByName: raw.reviewedByName ?? undefined,
-    reviewedAt: raw.reviewedAt ?? undefined,
-    reviewNotes: raw.reviewNotes ?? undefined,
-  };
-}

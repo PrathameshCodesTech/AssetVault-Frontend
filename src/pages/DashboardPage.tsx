@@ -5,16 +5,25 @@ import { mapDashboardSummary } from '@/services/mappers';
 import EmployeeDashboard from '@/components/dashboard/EmployeeDashboard';
 import AdminDashboard from '@/components/dashboard/AdminDashboard';
 import SuperAdminDashboard from '@/components/dashboard/SuperAdminDashboard';
-import ThirdPartyDashboard from '@/components/dashboard/ThirdPartyDashboard';
+import VendorDashboard from '@/components/dashboard/VendorDashboard';
 import { ShieldCheck, Loader2 } from 'lucide-react';
 
 export default function DashboardPage() {
   const { user } = useAuth();
 
+  const isVendorOnly = (user?.permissions?.includes('vendor.respond') ?? false)
+    && !['super_admin', 'location_admin', 'employee'].includes(user?.role ?? '');
+
   const { data: rawSummary, isLoading, error } = useQuery({
     queryKey: ['dashboard'],
     queryFn: fetchDashboardSummary,
+    enabled: !isVendorOnly,
   });
+
+  // Vendor-only users have their own dashboard — skip summary fetch entirely
+  if (isVendorOnly) {
+    return <div className="p-4 md:p-6"><VendorDashboard /></div>;
+  }
 
   const summary = rawSummary ? mapDashboardSummary(rawSummary) : null;
 
@@ -53,7 +62,6 @@ export default function DashboardPage() {
       {user?.role === 'employee' && <EmployeeDashboard summary={summary} />}
       {user?.role === 'location_admin' && <AdminDashboard summary={summary} extraData={rawSummary} />}
       {user?.role === 'super_admin' && <SuperAdminDashboard summary={summary} extraData={rawSummary} />}
-      {user?.role === 'third_party' && <ThirdPartyDashboard />}
     </div>
   );
 }

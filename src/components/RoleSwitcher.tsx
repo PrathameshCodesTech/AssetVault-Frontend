@@ -14,7 +14,6 @@ export default function RoleSwitcher() {
         <SelectItem value="super_admin">Super Admin</SelectItem>
         <SelectItem value="location_admin">Location Admin</SelectItem>
         <SelectItem value="employee">Employee</SelectItem>
-        <SelectItem value="third_party">Third-Party Op.</SelectItem>
       </SelectContent>
     </Select>
   );

@@ -62,6 +62,9 @@ export default function LoginPage() {
     if (e.key === 'Backspace' && !otp[index] && index > 0) {
       inputRefs.current[index - 1]?.focus();
     }
+    if (e.key === 'Enter') {
+      handleVerify();
+    }
   };
 
   const handleVerify = async () => {

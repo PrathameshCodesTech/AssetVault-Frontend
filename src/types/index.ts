@@ -1,14 +1,15 @@
-export type UserRole = 'super_admin' | 'location_admin' | 'employee' | 'third_party';
+export type UserRole = 'super_admin' | 'location_admin' | 'employee';
 
 export interface User {
   id: string;
   email: string;
   name: string;
   role: UserRole;
+  permissions: string[];
   locationId?: string;
   locationName?: string;
   avatar?: string;
-  assignedLocationIds?: string[]; // For third-party operators - restricted locations
+  assignedLocationIds?: string[];
 }
 
 // ---- Location Hierarchy ----
@@ -120,6 +121,16 @@ export interface Asset {
   updatedAt: string;
   assetDetails?: AssetDetails;
   wfhDetails?: WfhDetails;
+  // Vendor reservation (present when asset is in a non-cancelled vendor request)
+  vendorRequestId?: string;
+  vendorRequestReference?: string;
+  vendorRequestStatus?: 'draft' | 'sent' | 'in_progress' | 'submitted' | 'correction_requested';
+  vendorName?: string;
+  // Unified workflow status (employee > vendor > available)
+  workflowType?: 'employee' | 'vendor' | null;
+  workflowStatus?: string;
+  workflowReference?: string;
+  workflowDisplay?: string;
 }
 
 export interface AssetHistory {
@@ -162,31 +173,6 @@ export interface ReconciliationSubmission {
   notes?: string;
 }
 
-// ---- Third-Party Submissions ----
-export type SubmissionStatus = 'pending' | 'approved' | 'rejected' | 'correction_requested';
-
-export interface ThirdPartySubmission {
-  id: string;
-  type: 'verification' | 'new_asset';
-  assetId?: string;        // If verifying existing
-  tempRefId?: string;      // If new asset
-  assetName?: string;
-  serialNumber?: string;
-  assetType?: string;
-  locationBreadcrumb: string;
-  locationPath: LocationPath;
-  photoUrl: string;
-  remarks?: string;
-  status: SubmissionStatus;
-  submittedBy: string;
-  submittedByName: string;
-  submittedAt: string;
-  reviewedBy?: string;
-  reviewedByName?: string;
-  reviewedAt?: string;
-  reviewNotes?: string;
-}
-
 // ---- Column definitions for dynamic selector ----
 export interface ColumnDef {
   key: string;
@@ -206,7 +192,7 @@ export const ASSET_COLUMNS: ColumnDef[] = [
   { key: 'subLocation', label: 'Sub Location', defaultVisible: true, group: 'basic' },
   { key: 'status', label: 'Status', defaultVisible: true, group: 'basic' },
   { key: 'reconciliationStatus', label: 'Reconciliation', defaultVisible: false, group: 'basic' },
-  { key: 'assignedToName', label: 'Assigned To', defaultVisible: false, group: 'basic' },
+  { key: 'assignedToName', label: 'Mapped To', defaultVisible: true, group: 'basic' },
   { key: 'purchaseDate', label: 'Purchase Date', defaultVisible: false, group: 'basic' },
   { key: 'purchaseValue', label: 'Purchase Value', defaultVisible: false, group: 'basic' },
   // Asset Details
@@ -225,4 +211,5 @@ export const ASSET_COLUMNS: ColumnDef[] = [
   { key: 'wfhUid', label: 'WFH UID', defaultVisible: false, group: 'wfh' },
   { key: 'wfhUserName', label: 'WFH User', defaultVisible: false, group: 'wfh' },
   { key: 'wfhUserEmail', label: 'WFH Email', defaultVisible: false, group: 'wfh' },
+  // Always-last workflow column (not in ColumnDef list so it cannot be hidden)
 ];
