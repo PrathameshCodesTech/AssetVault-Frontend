@@ -18,7 +18,7 @@ import {
   AdminReviewDecision,
 } from '@/services/verificationService';
 import {
-  ShieldCheck, CheckCircle, AlertTriangle, Clock, ChevronRight, ArrowLeft, X, AlertCircle,
+  ShieldCheck, CheckCircle, AlertTriangle, Clock, ChevronRight, ArrowLeft, X, AlertCircle, Copy,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +53,7 @@ function adminDecisionBadgeClass(d: string) {
   switch (d) {
     case 'approved': return 'bg-green-100 text-green-800 border-green-200';
     case 'correction_required': return 'bg-orange-100 text-orange-800 border-orange-200';
+    case 'missing': return 'bg-red-100 text-red-700 border-red-200';
     default: return 'bg-gray-100 text-gray-500 border-gray-200';
   }
 }
@@ -66,10 +67,13 @@ function responseIcon(resp: string | null | undefined) {
 }
 
 function formatStatus(s: string) {
+  // correction_requested covers mixed admin-reviewed states (approved + missing + correction_required).
+  // "Verification Findings" is the correct audit-friendly label for admin/history contexts.
+  if (s === 'correction_requested') return 'Verification Findings';
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-type DecisionMap = Record<string, AdminReviewDecision | 'pending_review'>;
+type DecisionMap = Record<string, AdminReviewDecision | 'pending_review' | 'missing'>;
 
 const STATUS_FILTERS = ['all', 'pending', 'opened', 'submitted', 'correction_requested', 'approved'];
 
@@ -95,11 +99,13 @@ function AssetReviewRow({
 
   return (
     <div className={`border rounded-md p-3 space-y-2 ${
-      decision === 'correction_required'
-        ? 'border-orange-300 bg-orange-50/30'
-        : decision === 'approved'
-          ? 'border-green-200 bg-green-50/20'
-          : ''
+      decision === 'missing'
+        ? 'border-red-300 bg-red-50/30'
+        : decision === 'correction_required'
+          ? 'border-orange-300 bg-orange-50/30'
+          : decision === 'approved'
+            ? 'border-green-200 bg-green-50/20'
+            : ''
     }`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
@@ -160,6 +166,7 @@ function AssetReviewRow({
               <SelectItem value="pending_review">Pending Review</SelectItem>
               <SelectItem value="approved">Approved</SelectItem>
               <SelectItem value="correction_required">Correction Required</SelectItem>
+              <SelectItem value="missing">Missing</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -221,12 +228,14 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
   const correctionMutation = useMutation({
     mutationFn: () => {
       if (!data) throw new Error('No data');
-      const assetReviews = data.request_assets.map((ra) => ({
-        request_asset_id: ra.id,
-        decision: (decisions[ra.id] === 'correction_required'
-          ? 'correction_required'
-          : 'approved') as AdminReviewDecision,
-      }));
+      const assetReviews = data.request_assets.map((ra) => {
+        const d = decisions[ra.id] ?? 'pending_review';
+        const decision: AdminReviewDecision =
+          d === 'correction_required' ? 'correction_required'
+          : d === 'missing' ? 'missing'
+          : 'approved';
+        return { request_asset_id: ra.id, decision };
+      });
       return reviewVerificationRequest(requestId, assetReviews, reviewNote);
     },
     onSuccess: () => {
@@ -242,7 +251,9 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
   if (!data) return <div className="p-6 text-muted-foreground">Not found.</div>;
 
   const canReview = data.status === 'submitted';
-  const hasCorrectionRequired = Object.values(decisions).some((d) => d === 'correction_required');
+  const hasCorrectionOrMissing = Object.values(decisions).some(
+    (d) => d === 'correction_required' || d === 'missing'
+  );
 
   // Live aggregate counts from local decision state (updates as admin picks decisions)
   const liveApproved = canReview
@@ -251,16 +262,19 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
   const liveCorrection = canReview
     ? Object.values(decisions).filter((d) => d === 'correction_required').length
     : data.correctionCount;
-  const livePending = data.assetCount - liveApproved - liveCorrection;
+  const liveMissing = canReview
+    ? Object.values(decisions).filter((d) => d === 'missing').length
+    : data.missingCount;
+  const livePending = data.assetCount - liveApproved - liveCorrection - liveMissing;
 
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="h-4 w-4 mr-1" />Back
         </Button>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <h2 className="text-lg font-semibold font-mono">{data.reference_code}</h2>
           <p className="text-sm text-muted-foreground">
             {data.employeeName} · {data.employeeEmail} · {data.assetCount} asset(s)
@@ -269,6 +283,23 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
         <Badge variant="outline" className={statusBadgeClass(data.status)}>
           {formatStatus(data.status)}
         </Badge>
+        {data.verification_link && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 shrink-0"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(data.verification_link!);
+                toast({ title: 'Verification link copied', description: 'You can now share it manually with the employee.' });
+              } catch {
+                toast({ title: 'Copy failed', description: 'Could not copy to clipboard.', variant: 'destructive' });
+              }
+            }}
+          >
+            <Copy className="h-3.5 w-3.5" /> Copy Verification Link
+          </Button>
+        )}
       </div>
 
       {/* Previous review notes banner */}
@@ -290,10 +321,11 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
             <div><span className="text-muted-foreground">Submitted:</span> {data.submitted_at ? new Date(data.submitted_at).toLocaleString() : '—'}</div>
             <div><span className="text-muted-foreground">Expires:</span> {data.expires_at ? new Date(data.expires_at).toLocaleDateString() : '—'}</div>
           </div>
-          <div className="flex gap-4 pt-1 border-t text-sm">
+          <div className="flex flex-wrap gap-4 pt-1 border-t text-sm">
             <span className="text-green-700 font-medium">Approved: {liveApproved}</span>
-            <span className="text-orange-700 font-medium">Correction Required: {liveCorrection}</span>
-            <span className="text-muted-foreground">Pending Review: {livePending}</span>
+            <span className="text-orange-700 font-medium">Correction: {liveCorrection}</span>
+            {liveMissing > 0 && <span className="text-red-700 font-medium">Missing: {liveMissing}</span>}
+            {livePending > 0 && <span className="text-muted-foreground">Pending: {livePending}</span>}
           </div>
         </CardContent>
       </Card>
@@ -315,6 +347,31 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
           ))}
         </CardContent>
       </Card>
+
+      {/* Missing assets section */}
+      {liveMissing > 0 && (
+        <Card className="border-red-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2 text-red-700">
+              <AlertCircle className="h-4 w-4" />
+              Missing Assets ({liveMissing})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.request_assets
+              .filter((ra) => (decisions[ra.id] ?? ra.response?.admin_review_status) === 'missing')
+              .map((ra) => (
+                <div key={ra.id} className="flex items-center justify-between border border-red-200 bg-red-50/30 rounded-md px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium">{ra.name}</p>
+                    <p className="text-xs text-muted-foreground font-mono">{ra.assetId}{ra.serialNumber ? ` · SN: ${ra.serialNumber}` : ''}</p>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] bg-red-100 text-red-700 border-red-200 shrink-0">Missing</Badge>
+                </div>
+              ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Employee reports */}
       {data.employee_reports.length > 0 && (
@@ -371,10 +428,14 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
       {canReview && (
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={() => { setReviewNote(''); setCorrectionOpen(true); }}>
-            <X className="h-4 w-4 mr-2" />Request Correction
+            <X className="h-4 w-4 mr-2" />Submit Review
           </Button>
-          <Button onClick={() => { setReviewNote(''); setApproveOpen(true); }}>
-            <CheckCircle className="h-4 w-4 mr-2" />Approve
+          <Button
+            onClick={() => { setReviewNote(''); setApproveOpen(true); }}
+            disabled={hasCorrectionOrMissing}
+            title={hasCorrectionOrMissing ? 'Some assets are marked Correction Required or Missing. Use Submit Review instead.' : undefined}
+          >
+            <CheckCircle className="h-4 w-4 mr-2" />Approve All
           </Button>
         </div>
       )}
@@ -399,17 +460,18 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
         </DialogContent>
       </Dialog>
 
-      {/* Correction dialog */}
+      {/* Review submission dialog */}
       <Dialog open={correctionOpen} onOpenChange={setCorrectionOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Request Correction</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Submit Review</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Assets marked "Correction Required" above will be sent back to the employee for re-verification.
-            Approved assets will remain locked and will not need to be re-verified.
+            Assets marked <strong>Correction Required</strong> will be sent back to the employee for re-verification.
+            Assets marked <strong>Missing</strong> will be recorded and tracked — the asset master status will be set to missing.
+            Approved assets remain locked.
           </p>
-          {!hasCorrectionRequired && (
+          {!hasCorrectionOrMissing && (
             <p className="text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded px-3 py-2">
-              Mark at least one asset as "Correction Required" before submitting.
+              Mark at least one asset as "Correction Required" or "Missing" before submitting. Use "Approve All" if everything is clear.
             </p>
           )}
           <div className="space-y-1">
@@ -421,9 +483,9 @@ function RequestDetail({ requestId, onBack }: { requestId: string; onBack: () =>
             <Button
               variant="destructive"
               onClick={() => correctionMutation.mutate()}
-              disabled={correctionMutation.isPending || !reviewNote.trim() || !hasCorrectionRequired}
+              disabled={correctionMutation.isPending || !reviewNote.trim() || !hasCorrectionOrMissing}
             >
-              {correctionMutation.isPending ? 'Sending...' : 'Send for Correction'}
+              {correctionMutation.isPending ? 'Submitting...' : 'Submit Review'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -522,13 +584,16 @@ export default function AdminVerificationReviewPage() {
                     <TableCell className="text-sm text-muted-foreground">{r.cycleName}</TableCell>
                     <TableCell>{r.assetCount}</TableCell>
                     <TableCell>
-                      {(r.approvedCount > 0 || r.correctionCount > 0) ? (
+                      {(r.approvedCount > 0 || r.correctionCount > 0 || r.missingCount > 0) ? (
                         <div className="flex flex-col gap-0.5">
                           {r.approvedCount > 0 && (
                             <span className="text-xs text-green-700">{r.approvedCount} approved</span>
                           )}
                           {r.correctionCount > 0 && (
                             <span className="text-xs text-orange-700">{r.correctionCount} correction</span>
+                          )}
+                          {r.missingCount > 0 && (
+                            <span className="text-xs text-red-700">{r.missingCount} missing</span>
                           )}
                         </div>
                       ) : r.issueCount > 0 ? (

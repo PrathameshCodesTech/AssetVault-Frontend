@@ -30,6 +30,7 @@ export interface AdminVerificationRequest {
   declarationPresent: boolean;
   approvedCount: number;
   correctionCount: number;
+  missingCount: number;
 }
 
 export interface VerificationAssetPhoto {
@@ -38,10 +39,11 @@ export interface VerificationAssetPhoto {
   uploaded_at: string;
 }
 
-export type AdminReviewDecision = 'approved' | 'correction_required';
+export type AdminReviewDecision = 'approved' | 'correction_required' | 'missing';
 
 export interface AdminVerificationRequestDetail extends AdminVerificationRequest {
   review_notes: string | null;
+  verification_link?: string;
   employee_reports: EmployeeAssetReport[];
   request_assets: {
     id: string;
@@ -56,7 +58,7 @@ export interface AdminVerificationRequestDetail extends AdminVerificationRequest
       response: string;
       remarks: string | null;
       responded_at: string | null;
-      admin_review_status: AdminReviewDecision | 'pending_review';
+      admin_review_status: AdminReviewDecision | 'pending_review' | 'missing';
       admin_review_note: string | null;
       issue: { issue_type: string; description: string } | null;
     } | null;
@@ -146,6 +148,10 @@ export async function uploadAssetPhoto(
     { headers: { "Content-Type": "multipart/form-data" } }
   );
   return data as VerificationAssetPhoto;
+}
+
+export async function deleteAssetPhoto(token: string, photoId: string): Promise<void> {
+  await api.delete(`/verification/public/${token}/photos/${photoId}/`);
 }
 
 export async function addMissingAsset(payload: Record<string, any>) {

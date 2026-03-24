@@ -15,6 +15,7 @@ export interface AssetListParams {
   category?: string;
   reconciliation_status?: string;
   location_id?: string;
+  location_admin_id?: string;
   assigned_to?: string;
   is_mapped?: string;
   entity?: string;
@@ -62,6 +63,21 @@ export async function assignAsset(id: string, payload: { user_id: string; note?:
   return data;
 }
 
+export async function bulkAssignAssets(payload: {
+  user_id: string;
+  asset_ids: string[];
+  note?: string;
+  force_reassign?: boolean;
+}) {
+  const { data } = await api.post('/assets/assign/bulk/', payload);
+  return data as { detail: string; assigned_count: number };
+}
+
+export async function markAssetFound(id: string, note?: string) {
+  const { data } = await api.post(`/assets/${id}/mark-found/`, { note });
+  return data as { detail: string; status: string };
+}
+
 export async function moveAsset(id: string, payload: { to_location_id: string; note?: string }) {
   const { data } = await api.post(`/assets/${id}/move/`, payload);
   return data;
@@ -88,9 +104,38 @@ export interface UserOption {
   name: string;
 }
 
-export async function fetchUsers(search?: string): Promise<UserOption[]> {
+export async function fetchUsers(search?: string, role?: string): Promise<UserOption[]> {
   const params: Record<string, string> = {};
   if (search) params.search = search;
+  if (role) params.role = role;
   const { data } = await api.get("/auth/users/", { params });
   return (data.results ?? data) as UserOption[];
+}
+
+export interface LocationOption {
+  id: string;
+  name: string;
+  location_type?: { code: string; name: string };
+  parent_id?: string | null;
+}
+
+export async function fetchLocationNodes(search?: string): Promise<LocationOption[]> {
+  const params: Record<string, string> = {};
+  if (search) params.search = search;
+  const { data } = await api.get("/locations/nodes/", { params });
+  return (data.results ?? data) as LocationOption[];
+}
+
+export interface LocationAdminOption {
+  id: string;
+  name: string;
+  email: string;
+  locations: { id: string; name: string }[];
+}
+
+export async function fetchLocationAdmins(search?: string): Promise<LocationAdminOption[]> {
+  const params: Record<string, string> = {};
+  if (search) params.search = search;
+  const { data } = await api.get("/auth/location-admins/", { params });
+  return (data.results ?? data) as LocationAdminOption[];
 }

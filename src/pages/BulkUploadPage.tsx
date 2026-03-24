@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, X, Download, Loader2 } from 'lucide-react';
+import { ArrowLeft, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, X, Download, Loader2, Info, MapPin, AlignLeft, Calendar, Layers } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { uploadPreview, processJob, fetchJobRows } from '@/services/bulkUploadService';
 
@@ -152,6 +152,90 @@ export default function BulkUploadPage() {
         <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ArrowLeft className="h-4 w-4" /></Button>
         <h1 className="text-xl font-bold">Bulk Asset Upload</h1>
       </div>
+
+      {/* Pre-upload guidance */}
+      <Card className="border-blue-200 bg-blue-50/40">
+        <CardContent className="pt-4 pb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Info className="h-4 w-4 text-blue-600 shrink-0" />
+            <span className="text-sm font-semibold text-blue-800">Before You Upload</span>
+            <span className="text-xs text-blue-600 ml-1">— use the template and read these rules to avoid failed rows</span>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+
+            {/* Required columns */}
+            <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                <AlignLeft className="h-3 w-3" /> Required Columns
+              </p>
+              <p className="text-xs text-foreground/80">These three columns must be present and non-empty in every row:</p>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {['Asset ID', 'Asset Type', 'Location'].map((col) => (
+                  <span key={col} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
+                    {col}
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                <span className="font-medium">Asset Name</span> is optional — if blank, the system falls back to Asset Description, then Asset ID.
+              </p>
+            </div>
+
+            {/* Master data matching */}
+            <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                <Layers className="h-3 w-3" /> Must Match System Records
+              </p>
+              <p className="text-xs text-foreground/80">When provided, these values must match active records already in the system:</p>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {['Asset Type', 'Location', 'Entity', 'Cost Center', 'Supplier', 'Sub Asset Type'].map((col) => (
+                  <span key={col} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                    {col}
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                <span className="font-medium">Sub Asset Type</span> must belong to the selected Asset Type.
+              </p>
+            </div>
+
+            {/* Formats */}
+            <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                <Calendar className="h-3 w-3" /> Formats
+              </p>
+              <p className="text-xs text-foreground/80">
+                <span className="font-medium">Files:</span> CSV and XLSX only. Legacy <code className="bg-muted px-1 rounded">.xls</code> is not supported.
+              </p>
+              <p className="text-xs text-foreground/80">
+                <span className="font-medium">Dates:</span>{' '}
+                <code className="bg-muted px-1 rounded">YYYY-MM-DD</code>{' · '}
+                <code className="bg-muted px-1 rounded">DD/MM/YYYY</code>{' · '}
+                <code className="bg-muted px-1 rounded">MM/DD/YYYY</code>{' · '}
+                <code className="bg-muted px-1 rounded">DD-MM-YYYY</code>
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Template has {TEMPLATE_HEADERS.length} columns — only the required ones above are mandatory; the rest are optional.
+              </p>
+            </div>
+
+            {/* Scope + template hint */}
+            <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                <MapPin className="h-3 w-3" /> Scope &amp; Template
+              </p>
+              <p className="text-xs text-foreground/80">
+                <span className="font-medium">Location Admins</span> can upload assets only for locations within their assigned hierarchy.
+              </p>
+              <p className="text-xs text-foreground/80">
+                Always use the downloaded template and <span className="font-medium">keep header names unchanged</span>. Renaming headers will cause parsing errors.
+              </p>
+            </div>
+
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader><CardTitle className="text-base">Upload CSV or XLSX File</CardTitle></CardHeader>

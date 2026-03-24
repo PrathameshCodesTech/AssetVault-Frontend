@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import {
   ShieldCheck, Package, Check, AlertCircle, Mail, ChevronRight,
-  Loader2, XCircle, Camera, Plus
+  Loader2, XCircle, Camera, Plus, Trash2
 } from 'lucide-react';
 import * as verificationService from '@/services/verificationService';
 import type { AssetResponse, VerificationAssetPhoto, EmployeeAssetReport } from '@/services/verificationService';
@@ -35,8 +35,11 @@ interface VerificationAsset {
   issueType: string;
   photos: VerificationAssetPhoto[];
   photoUploading: boolean;
-  adminReviewStatus: 'pending_review' | 'approved' | 'correction_required';
+  photoRemoving: string | null; // photo id being deleted, or null
+  adminReviewStatus: 'pending_review' | 'approved' | 'correction_required' | 'missing';
   adminReviewNote: string | null;
+  /** null = not in correction context; true = needs action; false = locked/superseded */
+  isActionable: boolean | null;
 }
 
 const STEPS = [
@@ -58,15 +61,18 @@ export default function EmployeeVerificationPage() {
   const [step, setStep] = useState<VerifyStep>('loading');
   const [email, setEmail] = useState('');
   const [assets, setAssets] = useState<VerificationAsset[]>([]);
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [agreed, setAgreed] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [employeeName, setEmployeeName] = useState('');
 
   const [requestStatus, setRequestStatus] = useState('');
+  // Backend-derived actionability flags (from PublicVerificationRequestSerializer)
+  const [isSuperseded, setIsSuperseded] = useState(false);
+  const [employeeActionRequired, setEmployeeActionRequired] = useState(true);
 
   // Admin review data
   const [reviewNotes, setReviewNotes] = useState('');
+
   const [existingReports, setExistingReports] = useState<EmployeeAssetReport[]>([]);
 
   // Report missing asset dialog
@@ -114,13 +120,17 @@ const status = requestData.status || '';
 
       setReviewNotes(requestData.review_notes || '');
       setExistingReports(requestData.employee_reports || []);
+      // Backend-derived actionability (fall back to true so non-correction requests work as before)
+      setIsSuperseded(requestData.is_superseded ?? false);
+      setEmployeeActionRequired(requestData.employee_action_required ?? true);
 
       const rawAssets = requestData.assets || requestData.request_assets || [];
       const isCorrection = status === 'correction_requested';
       setAssets(rawAssets.map((a: any) => {
-        const adminReviewStatus: 'pending_review' | 'approved' | 'correction_required' =
+        const adminReviewStatus: 'pending_review' | 'approved' | 'correction_required' | 'missing' =
           a.response?.admin_review_status || 'pending_review';
         // In correction mode: reset correction_required assets to pending so employee re-reviews them
+        // Missing assets are locked and stay with their existing response status
         const resolvedStatus = isCorrection && adminReviewStatus === 'correction_required'
           ? 'pending'
           : (a.response?.response === 'verified' ? 'verified' : a.response?.response === 'issue_reported' ? 'issue' : 'pending') as 'pending' | 'verified' | 'issue';
@@ -136,8 +146,10 @@ const status = requestData.status || '';
           issueType: a.response?.issue?.issue_type || '',
           photos: Array.isArray(a.photos) ? a.photos : [],
           photoUploading: false,
+          photoRemoving: null,
           adminReviewStatus,
           adminReviewNote: a.response?.admin_review_note || null,
+          isActionable: a.is_actionable !== undefined ? (a.is_actionable as boolean | null) : null,
         };
       }));
 
@@ -148,7 +160,6 @@ const status = requestData.status || '';
 
   const handleAssetStatus = (id: string, status: 'verified' | 'issue') => {
     setAssets((prev) => prev.map((a) => a.id === id ? { ...a, status } : a));
-    if (status === 'issue') setSelectedAssetId(id);
   };
 
   const handleIssueNote = (id: string, note: string) => {
@@ -185,6 +196,28 @@ const status = requestData.status || '';
     }
   };
 
+  const handlePhotoRemove = async (assetId: string, photoId: string) => {
+    if (!publicToken) return;
+    setAssets((prev) => prev.map((a) => a.id === assetId ? { ...a, photoRemoving: photoId } : a));
+    try {
+      await verificationService.deleteAssetPhoto(publicToken, photoId);
+      setAssets((prev) =>
+        prev.map((a) =>
+          a.id === assetId
+            ? { ...a, photos: a.photos.filter((p) => p.id !== photoId), photoRemoving: null }
+            : a
+        )
+      );
+    } catch (err: any) {
+      toast({
+        title: 'Remove Failed',
+        description: err?.response?.data?.detail || 'Could not remove photo.',
+        variant: 'destructive',
+      });
+      setAssets((prev) => prev.map((a) => a.id === assetId ? { ...a, photoRemoving: null } : a));
+    }
+  };
+
   const handleReportSubmit = async () => {
     if (!publicToken || !reportForm.asset_name.trim()) return;
     setReportSubmitting(true);
@@ -202,7 +235,15 @@ const status = requestData.status || '';
   };
 
   const isCorrection = requestStatus === 'correction_requested';
+  const correctionRequiredCount = assets.filter((a) => a.adminReviewStatus === 'correction_required').length;
+  // Backend-authoritative: employee_action_required covers both "no correction_required assets"
+  // AND "correction_required assets superseded by newer requests for the same assets".
+  // Falls back to local count when backend flag is unavailable (defensive).
+  const hasActionableCorrections = isCorrection
+    ? (employeeActionRequired && !isSuperseded)
+    : correctionRequiredCount > 0;
   // In correction mode only correction_required assets need to be reviewed
+  // Missing and approved assets are locked and excluded
   const editableAssets = isCorrection
     ? assets.filter((a) => a.adminReviewStatus === 'correction_required')
     : assets;
@@ -210,16 +251,18 @@ const status = requestData.status || '';
   const verifiedCount = assets.filter((a) => a.status === 'verified').length;
   const issueCount = assets.filter((a) => a.status === 'issue').length;
   const approvedCount = assets.filter((a) => a.adminReviewStatus === 'approved').length;
-  const correctionRequiredCount = assets.filter((a) => a.adminReviewStatus === 'correction_required').length;
+  const missingCount = assets.filter((a) => a.adminReviewStatus === 'missing').length;
+  // All assets with status=issue must have an issue type selected before continuing
+  const allIssueTyped = assets.every((a) => a.status !== 'issue' || !!a.issueType);
 
   const submitMutation = useMutation({
     mutationFn: () => {
       if (!publicToken) throw new Error('No token');
       // In correction mode only send responses for correction_required assets;
-      // already-approved assets are protected server-side too.
+      // approved and missing assets are locked server-side and should not be resubmitted.
       const assetsToSubmit = isCorrection
         ? assets.filter((a) => a.adminReviewStatus === 'correction_required')
-        : assets;
+        : assets.filter((a) => a.adminReviewStatus !== 'missing');
       const responses: AssetResponse[] = assetsToSubmit.map((a) => ({
         request_asset_id: a.id,
         response: a.status === 'verified' ? 'verified' : 'issue_reported',
@@ -308,21 +351,39 @@ const status = requestData.status || '';
                   <div className="text-center">
                     <ShieldCheck className="h-10 w-10 text-primary mx-auto mb-2" />
                     <h2 className="text-lg font-bold">
-                      {isCorrection ? 'Correction Required' : 'Asset Verification'}
+                      {isCorrection && !hasActionableCorrections
+                        ? 'No Employee Action Pending'
+                        : isCorrection
+                          ? 'Action Required'
+                          : 'Asset Verification'}
                     </h2>
                     <p className="text-sm text-muted-foreground mt-1">
                       {employeeName ? `Hello ${employeeName}` : 'Hello'} — please review and confirm your assigned assets below.
                     </p>
                   </div>
-                  {isCorrection && (
+                  {isCorrection && hasActionableCorrections && (
                     <div className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm space-y-1">
-                      <p className="font-medium text-warning flex items-center gap-1"><AlertCircle className="h-4 w-4" /> Some assets require correction</p>
+                      <p className="font-medium text-warning flex items-center gap-1"><AlertCircle className="h-4 w-4" /> Some assets require your action</p>
                       {(approvedCount > 0 || correctionRequiredCount > 0) && (
                         <p className="text-muted-foreground text-xs">
                           {approvedCount > 0 && `${approvedCount} approved · `}{correctionRequiredCount > 0 && `${correctionRequiredCount} need your action`}
                         </p>
                       )}
                       {reviewNotes && <p className="text-muted-foreground text-xs">{reviewNotes}</p>}
+                    </div>
+                  )}
+                  {isCorrection && !hasActionableCorrections && (
+                    <div className="rounded-lg border border-muted bg-muted/30 p-3 text-sm space-y-1">
+                      <p className="text-muted-foreground">
+                        {approvedCount > 0 && missingCount > 0
+                          ? `${approvedCount} approved · ${missingCount} missing`
+                          : approvedCount > 0
+                            ? `${approvedCount} asset(s) approved`
+                            : missingCount > 0
+                              ? `${missingCount} asset(s) missing`
+                              : 'All assets have been reviewed.'}
+                      </p>
+                      <p className="text-xs text-muted-foreground">Approved assets are locked. Missing assets remain part of the historical review record.</p>
                     </div>
                   )}
                   <div className="bg-muted rounded-lg p-3 text-sm space-y-1">
@@ -349,11 +410,19 @@ const status = requestData.status || '';
                 <p className="text-sm text-muted-foreground">{employeeName ? `${employeeName}, please` : 'Please'} confirm each asset below.</p>
               </div>
 
-              {(requestStatus === 'rejected' || requestStatus === 'correction_requested') && (
+              {requestStatus === 'rejected' && (
                 <Card className="border-warning/40 bg-warning/5">
                   <CardContent className="p-3 text-sm space-y-1">
-                    <p className="font-medium text-warning flex items-center gap-1"><AlertCircle className="h-4 w-4" /> Returned for Correction</p>
-                    {isCorrection && (approvedCount > 0 || correctionRequiredCount > 0) && (
+                    <p className="font-medium text-warning flex items-center gap-1"><AlertCircle className="h-4 w-4" /> Action Required</p>
+                    {reviewNotes && <p className="text-muted-foreground">{reviewNotes}</p>}
+                  </CardContent>
+                </Card>
+              )}
+              {isCorrection && hasActionableCorrections && (
+                <Card className="border-warning/40 bg-warning/5">
+                  <CardContent className="p-3 text-sm space-y-1">
+                    <p className="font-medium text-warning flex items-center gap-1"><AlertCircle className="h-4 w-4" /> Action Required</p>
+                    {(approvedCount > 0 || correctionRequiredCount > 0) && (
                       <p className="text-muted-foreground text-xs">
                         {approvedCount > 0 && `${approvedCount} asset(s) approved · `}
                         {correctionRequiredCount > 0 && `${correctionRequiredCount} asset(s) require correction`}
@@ -363,11 +432,30 @@ const status = requestData.status || '';
                   </CardContent>
                 </Card>
               )}
+              {isCorrection && !hasActionableCorrections && (
+                <Card className="border-muted bg-muted/20">
+                  <CardContent className="p-3 text-sm space-y-1">
+                    <p className="font-medium text-muted-foreground">No Employee Action Pending</p>
+                    <p className="text-xs text-muted-foreground">
+                      {approvedCount > 0 && missingCount > 0
+                        ? `${approvedCount} approved · ${missingCount} missing`
+                        : approvedCount > 0
+                          ? `${approvedCount} asset(s) approved`
+                          : missingCount > 0
+                            ? `${missingCount} asset(s) missing`
+                            : 'All assets have been reviewed.'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Approved assets are locked. Missing assets remain part of the historical review record.</p>
+                  </CardContent>
+                </Card>
+              )}
 
               <div className="flex items-center justify-between text-sm bg-muted rounded-lg p-3">
-                {isCorrection
-                  ? <span>Corrected: {editableAssets.filter((a) => a.status !== 'pending').length} / {correctionRequiredCount}</span>
-                  : <span>Reviewed: {verifiedCount + issueCount} / {assets.length}</span>
+                {isCorrection && !hasActionableCorrections
+                  ? <span className="text-muted-foreground">No assets require action</span>
+                  : isCorrection
+                    ? <span>Corrected: {editableAssets.filter((a) => a.status !== 'pending').length} / {correctionRequiredCount}</span>
+                    : <span>Reviewed: {verifiedCount + issueCount} / {assets.length}</span>
                 }
                 {issueCount > 0 && <span className="text-destructive font-medium">{issueCount} issue(s)</span>}
               </div>
@@ -375,9 +463,18 @@ const status = requestData.status || '';
               <div className="space-y-2">
                 {assets.map((asset) => {
                   const isApproved = isCorrection && asset.adminReviewStatus === 'approved';
-                  const needsCorrection = isCorrection && asset.adminReviewStatus === 'correction_required';
+                  const isMissing = asset.adminReviewStatus === 'missing';
+                  // Superseded: was correction_required but has been resolved in a newer request
+                  const isSupersededAsset = isCorrection
+                    && asset.adminReviewStatus === 'correction_required'
+                    && asset.isActionable === false;
+                  const needsCorrection = isCorrection
+                    && asset.adminReviewStatus === 'correction_required'
+                    && !isSupersededAsset;
+                  // Treat superseded correction assets like locked/read-only
+                  const isLocked = isApproved || isMissing || isSupersededAsset;
                   return (
-                  <Card key={asset.id} className={`border-2 transition-colors ${isApproved ? 'border-success/40 bg-success/5 opacity-80' : asset.status === 'verified' ? 'border-success/40 bg-success/5' : asset.status === 'issue' ? 'border-destructive/40 bg-destructive/5' : needsCorrection ? 'border-warning/40 bg-warning/5' : 'border-border'}`}>
+                  <Card key={asset.id} className={`border-2 transition-colors ${isMissing ? 'border-destructive/40 bg-destructive/5 opacity-80' : isApproved ? 'border-success/40 bg-success/5 opacity-80' : isSupersededAsset ? 'border-border bg-muted/20 opacity-75' : asset.status === 'verified' ? 'border-success/40 bg-success/5' : asset.status === 'issue' ? 'border-destructive/40 bg-destructive/5' : needsCorrection ? 'border-warning/40 bg-warning/5' : 'border-border'}`}>
                     <CardContent className="p-4 space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -387,9 +484,17 @@ const status = requestData.status || '';
                             <p className="text-xs text-muted-foreground">{asset.assetId} · {asset.serialNumber}</p>
                           </div>
                         </div>
-                        {isApproved ? (
+                        {isMissing ? (
+                          <div className="text-xs font-medium px-2 py-1 rounded bg-destructive/10 text-destructive flex items-center gap-1">
+                            <AlertCircle className="h-3 w-3" /> Missing
+                          </div>
+                        ) : isApproved ? (
                           <div className="text-xs font-medium px-2 py-1 rounded bg-success/10 text-success flex items-center gap-1">
                             <Check className="h-3 w-3" /> Approved
+                          </div>
+                        ) : isSupersededAsset ? (
+                          <div className="text-xs font-medium px-2 py-1 rounded bg-muted text-muted-foreground flex items-center gap-1">
+                            <Check className="h-3 w-3" /> Resolved
                           </div>
                         ) : needsCorrection && asset.status === 'pending' ? (
                           <div className="text-xs font-medium px-2 py-1 rounded bg-warning/10 text-warning flex items-center gap-1">
@@ -412,9 +517,13 @@ const status = requestData.status || '';
                           <span><span className="font-medium">Admin note:</span> {asset.adminReviewNote}</span>
                         </div>
                       )}
-                      {/* Approved read-only label */}
-                      {isApproved ? (
+                      {/* Read-only lock labels */}
+                      {isMissing ? (
+                        <p className="text-xs text-destructive/70 italic">This asset has been marked as missing by admin and is locked for resubmission.</p>
+                      ) : isApproved ? (
                         <p className="text-xs text-muted-foreground italic">This asset has been approved and is locked.</p>
+                      ) : isSupersededAsset ? (
+                        <p className="text-xs text-muted-foreground italic">This asset has been resolved in a newer verification request and is part of the historical record.</p>
                       ) : (
                       <>
                       <div className="flex gap-2">
@@ -437,12 +546,21 @@ const status = requestData.status || '';
                       </div>
                       {asset.status === 'issue' && (
                         <div className="space-y-2 mt-2">
-                          <Input
-                            placeholder="Issue type (e.g., missing, damaged, wrong location)"
-                            value={asset.issueType}
-                            onChange={(e) => handleIssueType(asset.id, e.target.value)}
-                            className="text-sm"
-                          />
+                          <Select
+                            value={asset.issueType || ''}
+                            onValueChange={(v) => handleIssueType(asset.id, v)}
+                          >
+                            <SelectTrigger className={`text-sm ${!asset.issueType ? 'text-muted-foreground' : ''}`}>
+                              <SelectValue placeholder="Select issue type *" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="missing">Missing</SelectItem>
+                              <SelectItem value="damaged">Damaged</SelectItem>
+                              <SelectItem value="wrong_serial">Wrong Serial Number</SelectItem>
+                              <SelectItem value="not_in_possession">Not In Possession</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
                           <Textarea
                             placeholder="Describe the issue..."
                             value={asset.note}
@@ -467,17 +585,33 @@ const status = requestData.status || '';
                         {asset.photos.length > 0 && (
                           <div className="flex gap-1.5 flex-wrap">
                             {asset.photos.map((p) => (
-                              <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer">
-                                <img
-                                  src={p.url}
-                                  alt="asset photo"
-                                  className="h-16 w-16 rounded object-cover border hover:opacity-80 transition-opacity"
-                                />
-                              </a>
+                              <div key={p.id} className="relative group h-16 w-16 shrink-0">
+                                <a href={p.url} target="_blank" rel="noopener noreferrer">
+                                  <img
+                                    src={p.url}
+                                    alt="asset photo"
+                                    className="h-16 w-16 rounded object-cover border hover:opacity-80 transition-opacity"
+                                  />
+                                </a>
+                                {!isLocked && (
+                                  <button
+                                    type="button"
+                                    title="Remove photo"
+                                    disabled={asset.photoRemoving === p.id}
+                                    onClick={(e) => { e.preventDefault(); handlePhotoRemove(asset.id, p.id); }}
+                                    className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+                                  >
+                                    {asset.photoRemoving === p.id
+                                      ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                      : <Trash2 className="h-2.5 w-2.5" />
+                                    }
+                                  </button>
+                                )}
+                              </div>
                             ))}
                           </div>
                         )}
-                        {asset.photos.length < 3 && (
+                        {asset.photos.length < 3 && !isLocked && (
                           <label className="cursor-pointer">
                             <input
                               type="file"
@@ -527,9 +661,15 @@ const status = requestData.status || '';
                 <Plus className="h-4 w-4" /> Report Missing / Misplaced Asset
               </Button>
 
-              <Button onClick={() => setStep('consent')} disabled={!allReviewed} className="w-full h-12 text-base">
-                Continue to Declaration <ChevronRight className="ml-2 h-4 w-4" />
-              </Button>
+              {isCorrection && !hasActionableCorrections ? (
+                <Button onClick={() => setStep('complete')} variant="outline" className="w-full h-12 text-base">
+                  Done
+                </Button>
+              ) : (
+                <Button onClick={() => setStep('consent')} disabled={!allReviewed || !allIssueTyped} className="w-full h-12 text-base">
+                  Continue to Declaration <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              )}
             </motion.div>
           )}
 

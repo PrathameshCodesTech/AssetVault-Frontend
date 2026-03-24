@@ -124,6 +124,26 @@
   }
 }
 
+/* Thin dark scrollbar — global (matches sidebar style) */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(228 27% 22%);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(228 27% 35%);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(228 27% 22%) transparent;
+}
+
 /* Thin modern scrollbar for sidebar */
 [data-sidebar="content"]::-webkit-scrollbar {
   width: 3px;

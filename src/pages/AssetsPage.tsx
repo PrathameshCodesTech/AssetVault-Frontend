@@ -1,17 +1,19 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { fetchAssets, fetchLookups, fetchUsers, assignAsset, UserOption } from '@/services/assetService';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { fetchAssets, fetchLookups, fetchUsers, fetchLocationNodes, fetchLocationAdmins, assignAsset, bulkAssignAssets, markAssetFound, UserOption, LocationOption, LocationAdminOption } from '@/services/assetService';
 import { mapBackendAsset } from '@/services/mappers';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Search, Filter, ChevronLeft, ChevronRight, Send, Loader2, AlertCircle, AlertTriangle, User, X, UserPlus, Truck } from 'lucide-react';
+import { Search, Filter, ChevronLeft, ChevronRight, Send, Loader2, AlertCircle, AlertTriangle, User, X, UserPlus, Truck, Check, ChevronsUpDown } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
@@ -61,6 +63,7 @@ const workflowColors: Record<string, string> = {
   draft:                 'bg-amber-100 text-amber-800 border-amber-300',
   correction_requested:  'bg-orange-100 text-orange-800 border-orange-300',
   approved:              'bg-green-100 text-green-800 border-green-300',
+  missing:               'bg-red-100 text-red-700 border-red-200',
 };
 
 function WorkflowCell({ asset }: { asset: Asset }) {
@@ -112,8 +115,15 @@ export default function AssetsPage() {
   const search = searchParams.get('q') ?? '';
   const statusFilter = searchParams.get('status') ?? 'all';
   const categoryFilter = searchParams.get('category') ?? 'all';
-  const isMappedFilter = (searchParams.get('mapped') ?? 'all') as 'all' | 'mapped' | 'unmapped';
+  const isMappedFilter = (searchParams.get('mapped') ?? 'all') as 'all' | 'employee' | 'unmapped';
+  const employeeSubview = (searchParams.get('emp_sub') ?? 'assigned') as 'assigned' | 'available';
   const page = parseInt(searchParams.get('page') ?? '1', 10);
+  const locationIdFilter = searchParams.get('loc_id') ?? '';
+  const locationAdminIdFilter = searchParams.get('loc_admin_id') ?? '';
+
+  // Reconstruct location + location-admin filter labels from URL params
+  const locationFilterName = searchParams.get('loc_name') ?? '';
+  const locationAdminFilterName = searchParams.get('loc_admin_name') ?? '';
 
   /** Patch one or more URL params; resets page to 1 unless `page` is in the patch. */
   function setParam(patch: Record<string, string | null | undefined>, keepPage = false) {
@@ -149,11 +159,69 @@ export default function AssetsPage() {
   const queryClient = useQueryClient();
   const isAdmin = user?.role === 'super_admin' || user?.role === 'location_admin';
 
+  // ── Mark Found ─────────────────────────────────────────────────────────
+  const markFoundMutation = useMutation({
+    mutationFn: (assetId: string) => markAssetFound(assetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['assets'] });
+      toast({ title: 'Asset restored to active', description: 'You can now send a fresh verification request if needed.' });
+    },
+    onError: (err: any) => toast({ title: 'Error', description: err?.response?.data?.detail || 'Could not restore asset.', variant: 'destructive' }),
+  });
+
   // ── Employee filter for verification workflow ──────────────────────────
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState<UserOption[]>([]);
   const [employeeLoading, setEmployeeLoading] = useState(false);
-  const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false);
+  const [employeeComboOpen, setEmployeeComboOpen] = useState(false);
+  const [vendorComboOpen, setVendorComboOpen] = useState(false);
+
+  // ── Location filter ────────────────────────────────────────────────────
+  const [locationComboOpen, setLocationComboOpen] = useState(false);
+  const [locationSearch, setLocationSearch] = useState('');
+  const [locationOptions, setLocationOptions] = useState<LocationOption[]>([]);
+  const [locationLoading, setLocationLoading] = useState(false);
+
+  useEffect(() => {
+    if (!locationComboOpen) return;
+    setLocationLoading(true);
+    fetchLocationNodes(locationSearch.length >= 1 ? locationSearch : undefined)
+      .then((nodes) => setLocationOptions(nodes.slice(0, 50)))
+      .catch(() => setLocationOptions([]))
+      .finally(() => setLocationLoading(false));
+  }, [locationSearch, locationComboOpen]);
+
+  const selectLocation = (loc: LocationOption) => {
+    setParam({ loc_id: loc.id, loc_name: loc.name });
+    setLocationComboOpen(false);
+    setLocationSearch('');
+  };
+
+  const clearLocation = () => setParam({ loc_id: null, loc_name: null });
+
+  // ── Location Admin filter (super_admin only) ───────────────────────────
+  const isSuperAdmin = user?.role === 'super_admin';
+  const [locAdminComboOpen, setLocAdminComboOpen] = useState(false);
+  const [locAdminSearch, setLocAdminSearch] = useState('');
+  const [locAdminOptions, setLocAdminOptions] = useState<LocationAdminOption[]>([]);
+  const [locAdminLoading, setLocAdminLoading] = useState(false);
+
+  useEffect(() => {
+    if (!locAdminComboOpen || !isSuperAdmin) return;
+    setLocAdminLoading(true);
+    fetchLocationAdmins(locAdminSearch.length >= 1 ? locAdminSearch : undefined)
+      .then((admins) => setLocAdminOptions(admins))
+      .catch(() => setLocAdminOptions([]))
+      .finally(() => setLocAdminLoading(false));
+  }, [locAdminSearch, locAdminComboOpen, isSuperAdmin]);
+
+  const selectLocAdmin = (admin: LocationAdminOption) => {
+    setParam({ loc_admin_id: admin.id, loc_admin_name: admin.name });
+    setLocAdminComboOpen(false);
+    setLocAdminSearch('');
+  };
+
+  const clearLocAdmin = () => setParam({ loc_admin_id: null, loc_admin_name: null });
 
   // Reconstruct selectedEmployee from URL so it survives navigation
   const selectedEmployee: UserOption | null = (() => {
@@ -163,30 +231,33 @@ export default function AssetsPage() {
     return id && name ? { id, name, email } : null;
   })();
 
-  const debouncedEmployeeSearch = useCallback(() => {
-    if (employeeSearch.length < 2) { setEmployeeOptions([]); return; }
-    setEmployeeLoading(true);
-    fetchUsers(employeeSearch)
-      .then((users) => setEmployeeOptions(users))
-      .catch(() => setEmployeeOptions([]))
-      .finally(() => setEmployeeLoading(false));
-  }, [employeeSearch]);
-
   useEffect(() => {
-    const timer = setTimeout(debouncedEmployeeSearch, 300);
+    if (!employeeComboOpen) return;
+    const delay = employeeSearch.length === 0 ? 0 : 300;
+    const timer = setTimeout(() => {
+      setEmployeeLoading(true);
+      fetchUsers(employeeSearch || undefined, 'employee')
+        .then((users) => setEmployeeOptions(users))
+        .catch(() => setEmployeeOptions([]))
+        .finally(() => setEmployeeLoading(false));
+    }, delay);
     return () => clearTimeout(timer);
-  }, [debouncedEmployeeSearch]);
+  }, [employeeSearch, employeeComboOpen]);
 
   const selectEmployee = (emp: UserOption) => {
-    setParam({ mapped: 'mapped', emp_id: emp.id, emp_name: emp.name, emp_email: emp.email });
+    setParam({ mapped: 'employee', emp_id: emp.id, emp_name: emp.name, emp_email: emp.email, emp_sub: 'assigned' });
     setEmployeeSearch('');
-    setShowEmployeeDropdown(false);
     setSelectedIds(new Set());
   };
 
   const clearEmployee = () => {
-    setParam({ emp_id: null, emp_name: null, emp_email: null });
+    setParam({ emp_id: null, emp_name: null, emp_email: null, emp_sub: null });
     setEmployeeSearch('');
+    setSelectedIds(new Set());
+  };
+
+  const switchEmployeeSubview = (subview: 'assigned' | 'available') => {
+    setParam({ emp_sub: subview });
     setSelectedIds(new Set());
   };
 
@@ -199,8 +270,25 @@ export default function AssetsPage() {
   if (search) queryParams.search = search;
   if (statusFilter !== 'all') queryParams.status = statusFilter;
   if (categoryFilter !== 'all') queryParams.category = categoryFilter;
-  if (isMappedFilter !== 'all') queryParams.is_mapped = isMappedFilter === 'mapped' ? 'true' : 'false';
-  if (selectedEmployee) queryParams.assigned_to = selectedEmployee.id;
+  if (locationIdFilter) queryParams.location_id = locationIdFilter;
+  if (locationAdminIdFilter) queryParams.location_admin_id = locationAdminIdFilter;
+
+  if (isMappedFilter === 'employee') {
+    if (employeeSubview === 'available') {
+      queryParams.is_mapped = 'false';
+      queryParams.vendor_linked = 'false';
+    } else {
+      // assigned subview
+      if (selectedEmployee) {
+        queryParams.assigned_to = selectedEmployee.id;
+      } else {
+        queryParams.is_mapped = 'true';
+      }
+    }
+  } else if (isMappedFilter === 'unmapped') {
+    queryParams.is_mapped = 'false';
+  }
+
   // Vendor subview filters (only when in unmapped mode with a vendor selected)
   if (isMappedFilter === 'unmapped' && selectedVendor) {
     if (vendorSubview === 'available') {
@@ -233,7 +321,7 @@ export default function AssetsPage() {
   // ── Multi-select ────────────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  useEffect(() => { setSelectedIds(new Set()); }, [page, search, statusFilter, categoryFilter, isMappedFilter]);
+  useEffect(() => { setSelectedIds(new Set()); }, [page, search, statusFilter, categoryFilter, isMappedFilter, employeeSubview]);
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
@@ -244,12 +332,10 @@ export default function AssetsPage() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === assets.length) {
+    if (selectedIds.size === selectableOnPage.length) {
       setSelectedIds(new Set());
     } else {
-      // Only select assets that belong to the selected employee (have assignedTo)
-      const selectable = assets.filter((a) => a.assignedTo);
-      setSelectedIds(new Set(selectable.map((a) => a.id)));
+      setSelectedIds(new Set(selectableOnPage.map((a) => a.id)));
     }
   };
 
@@ -311,7 +397,7 @@ export default function AssetsPage() {
       if (search) baseParams.search = search;
       if (statusFilter !== 'all') baseParams.status = statusFilter;
       if (categoryFilter !== 'all') baseParams.category = categoryFilter;
-      if (isMappedFilter !== 'all') baseParams.is_mapped = isMappedFilter === 'mapped' ? 'true' : 'false';
+      if (locationIdFilter) baseParams.location_id = locationIdFilter;
       baseParams.assigned_to = selectedEmployee.id;
 
       // Fetch all pages so the count is exact — no silent cap
@@ -391,7 +477,6 @@ export default function AssetsPage() {
 
   // ── Vendor send panel ────────────────────────────────────────────────
   const [vendorSearch, setVendorSearch] = useState('');
-  const [showVendorDropdown, setShowVendorDropdown] = useState(false);
   const [vendorSendLoading, setVendorSendLoading] = useState(false);
   const [vendorSendAllLoading, setVendorSendAllLoading] = useState(false);
   const [vendorSendOpen, setVendorSendOpen] = useState(false);
@@ -522,7 +607,7 @@ export default function AssetsPage() {
     if (mapSearch.length < 2) { setMapOptions([]); return; }
     const timer = setTimeout(() => {
       setMapSearchLoading(true);
-      fetchUsers(mapSearch)
+      fetchUsers(mapSearch, 'employee')
         .then((users) => setMapOptions(users))
         .catch(() => setMapOptions([]))
         .finally(() => setMapSearchLoading(false));
@@ -572,15 +657,76 @@ export default function AssetsPage() {
     setMapLoading(false);
   };
 
+  // ── Bulk map employee dialog ──────────────────────────────────────────
+  const [bulkMapOpen, setBulkMapOpen] = useState(false);
+  const [bulkMapEmployee, setBulkMapEmployee] = useState<UserOption | null>(null);
+  const [bulkMapSearch, setBulkMapSearch] = useState('');
+  const [bulkMapOptions, setBulkMapOptions] = useState<UserOption[]>([]);
+  const [bulkMapSearchLoading, setBulkMapSearchLoading] = useState(false);
+  const [bulkMapLoading, setBulkMapLoading] = useState(false);
+  const [bulkMapComboOpen, setBulkMapComboOpen] = useState(false);
+  const [bulkMapConflict, setBulkMapConflict] = useState<{
+    conflicts: { asset_id: string; request_reference: string; employee_name: string }[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (bulkMapSearch.length < 2) { setBulkMapOptions([]); return; }
+    const timer = setTimeout(() => {
+      setBulkMapSearchLoading(true);
+      fetchUsers(bulkMapSearch, 'employee')
+        .then((users) => setBulkMapOptions(users))
+        .catch(() => setBulkMapOptions([]))
+        .finally(() => setBulkMapSearchLoading(false));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [bulkMapSearch]);
+
+  const canBulkMap = isAdmin && isMappedFilter === 'employee' && employeeSubview === 'available' && selectedIds.size > 0;
+
+  const confirmBulkMap = async (forceReassign = false) => {
+    if (!bulkMapEmployee || selectedIds.size === 0) return;
+    setBulkMapLoading(true);
+    try {
+      const result = await bulkAssignAssets({
+        user_id: bulkMapEmployee.id,
+        asset_ids: Array.from(selectedIds),
+        force_reassign: forceReassign,
+      });
+      toast({ title: `${result.assigned_count} asset(s) mapped`, description: `Assigned to ${bulkMapEmployee.name}.` });
+      setBulkMapOpen(false);
+      setBulkMapEmployee(null);
+      setBulkMapSearch('');
+      setBulkMapConflict(null);
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ['assets'] });
+    } catch (err: any) {
+      const d = err?.response?.data;
+      const conflictType = d?.conflict_type;
+      if (conflictType === 'active_vendor_request') {
+        toast({ title: 'Vendor Request Conflict', description: d?.detail || 'Some assets are in active vendor requests.', variant: 'destructive' });
+      } else if (conflictType === 'active_employee_request') {
+        setBulkMapConflict({ conflicts: d?.conflicts ?? [] });
+      } else {
+        toast({ title: 'Error', description: d?.detail || 'Failed to assign assets.', variant: 'destructive' });
+      }
+    }
+    setBulkMapLoading(false);
+  };
+
   const activeColumnDefs = ASSET_COLUMNS.filter((c) => visibleColumns.includes(c.key));
   const displayColumnDefs = activeColumnDefs.map((col) =>
     col.key === 'assignedToName' && isMappedFilter === 'unmapped'
       ? { ...col, label: 'Vendor' }
       : col
   );
-  const canSendVerification = isAdmin && !!selectedEmployee;
-  const selectableOnPage = assets.filter((a) => a.assignedTo);
-  const showCheckboxes = canSendVerification || canSendVendor;
+  const canSendVerification = isAdmin && isMappedFilter === 'employee' && employeeSubview === 'assigned' && !!selectedEmployee;
+  const canBulkMapSelect = isAdmin && isMappedFilter === 'employee' && employeeSubview === 'available';
+  const selectableOnPage = canSendVerification
+    ? assets.filter((a) => a.assignedTo)
+    : canBulkMapSelect
+    ? assets.filter((a) => !a.vendorRequestStatus)
+    : assets.filter((a) => !a.assignedTo && !a.vendorRequestStatus);
+  const showCheckboxes = canSendVerification || canSendVendor || canBulkMapSelect;
   const showEmployeeMapActions = isAdmin && isMappedFilter !== 'unmapped';
 
   const renderMappedDisplay = (asset: Asset) => {
@@ -646,180 +792,212 @@ export default function AssetsPage() {
               Send All Filtered{totalCount > 0 ? ` (${totalCount})` : ''}
             </Button>
           )}
+          {canBulkMap && (
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => { setBulkMapOpen(true); setBulkMapConflict(null); setBulkMapEmployee(selectedEmployee ?? null); setBulkMapSearch(''); }}>
+              <UserPlus className="h-3.5 w-3.5" /> Map Selected ({selectedIds.size})
+            </Button>
+          )}
           <span className="text-sm text-muted-foreground">{totalCount.toLocaleString()} assets</span>
         </div>
       </div>
 
-      {/* Employee verification panel — admin only */}
-      {isAdmin && isMappedFilter !== 'unmapped' && (
-        <Card className="border-primary/20">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <User className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">Employee Verification</span>
-            </div>
-            {selectedEmployee ? (
-              <div className="flex items-center justify-between bg-primary/5 rounded-lg px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{selectedEmployee.name}</p>
-                  <p className="text-xs text-muted-foreground">{selectedEmployee.email}</p>
-                </div>
-                <Button variant="ghost" size="sm" onClick={clearEmployee} className="h-7 w-7 p-0">
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ) : (
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search employee by name or email..."
-                  value={employeeSearch}
-                  onChange={(e) => { setEmployeeSearch(e.target.value); setShowEmployeeDropdown(true); }}
-                  onFocus={() => setShowEmployeeDropdown(true)}
-                  className="pl-9 h-9 text-sm"
-                />
-                {showEmployeeDropdown && employeeSearch.length >= 2 && (
-                  <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                    {employeeLoading ? (
-                      <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Searching...
-                      </div>
-                    ) : employeeOptions.length === 0 ? (
-                      <div className="p-3 text-sm text-muted-foreground">No employees found.</div>
-                    ) : (
-                      employeeOptions.map((emp) => (
-                        <button
-                          key={emp.id}
-                          onClick={() => selectEmployee(emp)}
-                          className="w-full text-left px-3 py-2 hover:bg-muted transition-colors text-sm"
-                        >
-                          <span className="font-medium">{emp.name}</span>
-                          <span className="text-muted-foreground ml-2">{emp.email}</span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-            {!selectedEmployee && (
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Select an employee to filter their assets and send verification requests.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Vendor send panel — admin only, unmapped filter active */}
-      {showVendorPanel && (
-        <Card className="border-blue-200">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Truck className="h-4 w-4 text-blue-600" />
-              <span className="text-sm font-medium">Vendor Verification</span>
-            </div>
-            {selectedVendor ? (
-              <div className="flex items-center justify-between bg-blue-50 rounded-lg px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{selectedVendor.name}</p>
-                  <p className="text-xs text-muted-foreground">{selectedVendor.code}</p>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700"
-                    onClick={() => navigate(`/admin/vendor-requests?vendor_id=${selectedVendor.id}`)}
-                  >
-                    View Requests
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0"
-                    onClick={() => { setSelectedVendor(null); setVendorSearch(''); }}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search vendor by name or code..."
-                  value={vendorSearch}
-                  onChange={(e) => { setVendorSearch(e.target.value); setShowVendorDropdown(true); }}
-                  onFocus={() => setShowVendorDropdown(true)}
-                  onBlur={() => setTimeout(() => setShowVendorDropdown(false), 150)}
-                  className="pl-9 h-9 text-sm"
-                />
-                {showVendorDropdown && (
-                  <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                    {filteredVendors.length === 0 ? (
-                      <div className="p-3 text-sm text-muted-foreground">
-                        {vendorSearch.length === 0 ? 'Type to search vendors.' : 'No vendors found.'}
-                      </div>
-                    ) : (
-                      filteredVendors.map((v) => (
-                        <button
-                          key={v.id}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => { setSelectedVendor(v); setVendorSearch(''); setShowVendorDropdown(false); }}
-                          className="w-full text-left px-3 py-2 hover:bg-muted transition-colors text-sm"
-                        >
-                          <span className="font-medium">{v.name}</span>
-                          <span className="text-muted-foreground ml-2 text-xs">{v.code}</span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-            {selectedVendor && (
-              <div className="flex gap-1 mt-2">
-                <button
-                  onClick={() => switchVendorSubview('available')}
-                  className={`flex-1 text-xs py-1 rounded-md border transition-colors ${
-                    vendorSubview === 'available'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-transparent text-muted-foreground border-muted hover:bg-muted'
-                  }`}
-                >
-                  Available
-                </button>
-                <button
-                  onClick={() => switchVendorSubview('reserved')}
-                  className={`flex-1 text-xs py-1 rounded-md border transition-colors ${
-                    vendorSubview === 'reserved'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-transparent text-muted-foreground border-muted hover:bg-muted'
-                  }`}
-                >
-                  Reserved
-                </button>
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground mt-1.5">
-              {selectedVendor
-                ? vendorSubview === 'available'
-                  ? (selectedIds.size > 0 ? `${selectedIds.size} asset(s) selected. ` : '') + 'Available assets are unmapped and not yet assigned to any vendor request.'
-                  : `Showing assets currently reserved for ${selectedVendor.name}.`
-                : 'Vendors are selected as the target for a verification request. Unmapped assets are not permanently assigned to a vendor.'}
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Filter bar */}
-      <div className="flex flex-col md:flex-row gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input placeholder="Search by name, ID, serial..." value={search} onChange={(e) => setParam({ q: e.target.value || null })} className="pl-9" />
+      {/* Employee selected strip — shown in employee mode when employee is selected */}
+      {isAdmin && isMappedFilter === 'employee' && selectedEmployee && (
+        <div className="flex items-center gap-3 border-b pb-3">
+          <div className="h-7 w-7 rounded-full bg-gradient-to-br from-orange-500 to-primary flex items-center justify-center shrink-0">
+            <User className="h-3.5 w-3.5 text-white" />
+          </div>
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <span className="text-sm font-medium truncate bg-gradient-to-r from-orange-500 to-primary bg-clip-text text-transparent">{selectedEmployee.name}</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline truncate">{selectedEmployee.email}</span>
+          </div>
+          <div className="flex items-center rounded-md bg-muted p-0.5 gap-0.5 shrink-0">
+            <button
+              onClick={() => switchEmployeeSubview('assigned')}
+              className={`px-3 py-1 text-xs font-medium rounded transition-all ${employeeSubview === 'assigned' ? 'bg-gradient-to-r from-orange-500 to-primary text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+            >Assigned</button>
+            <button
+              onClick={() => switchEmployeeSubview('available')}
+              className={`px-3 py-1 text-xs font-medium rounded transition-all ${employeeSubview === 'available' ? 'bg-gradient-to-r from-orange-500 to-primary text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+            >Available</button>
+          </div>
+          {selectedIds.size > 0 && (
+            <span className="text-xs text-muted-foreground shrink-0 hidden sm:inline">{selectedIds.size} selected</span>
+          )}
+          <Button variant="ghost" size="sm" onClick={clearEmployee} className="h-7 w-7 p-0 shrink-0">
+            <X className="h-3.5 w-3.5" />
+          </Button>
         </div>
-        <div className="flex gap-2 flex-wrap">
+      )}
+
+      {/* Vendor strip — admin only, unmapped filter active */}
+      {showVendorPanel && selectedVendor && (
+        <div className="border border-blue-200 bg-blue-50/50 rounded-lg px-3 py-2 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 min-w-0">
+              <Truck className="h-4 w-4 text-blue-600 shrink-0" />
+              <span className="text-sm font-medium truncate">{selectedVendor.name}</span>
+              <span className="text-xs text-muted-foreground hidden sm:inline">{selectedVendor.code}</span>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700"
+                onClick={() => navigate(`/admin/vendor-requests?vendor_id=${selectedVendor.id}`)}
+              >
+                View Requests
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => { setSelectedVendor(null); setVendorSearch(''); }}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+          <div className="flex gap-1">
+            <button
+              onClick={() => switchVendorSubview('available')}
+              className={`flex-1 text-xs py-1 rounded-md border transition-colors ${vendorSubview === 'available' ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-muted-foreground border-muted hover:bg-muted'}`}
+            >Available</button>
+            <button
+              onClick={() => switchVendorSubview('reserved')}
+              className={`flex-1 text-xs py-1 rounded-md border transition-colors ${vendorSubview === 'reserved' ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-muted-foreground border-muted hover:bg-muted'}`}
+            >Reserved</button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {vendorSubview === 'available'
+              ? (selectedIds.size > 0 ? `${selectedIds.size} asset(s) selected. ` : '') + 'Available assets are unmapped and not yet assigned to any vendor request.'
+              : `Showing assets currently reserved for ${selectedVendor.name}.`}
+          </p>
+        </div>
+      )}
+
+      {/* Filter bar — row 1: Search · Category · Mode · Employee/Vendor selector */}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap gap-2">
+          {/* Search */}
+          <div className="relative w-full sm:w-56 shrink-0">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input placeholder="Search by name, ID, serial..." value={search} onChange={(e) => setParam({ q: e.target.value || null })} className="pl-9" />
+          </div>
+
+          {/* Category */}
+          <Select value={categoryFilter} onValueChange={(v) => setParam({ category: v })}>
+            <SelectTrigger className="w-[150px]"><SelectValue placeholder="Category" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Categories</SelectItem>
+              {categories.map((c) => <SelectItem key={c.code} value={c.code}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+
+          {/* Mode */}
+          <Select value={isMappedFilter} onValueChange={(v) => {
+            const next = v as 'all' | 'employee' | 'unmapped';
+            if (next === 'unmapped') {
+              setParam({ mapped: next, emp_id: null, emp_name: null, emp_email: null, emp_sub: null });
+              setEmployeeSearch('');
+            } else if (next === 'employee') {
+              setParam({ mapped: next, emp_sub: 'assigned' });
+              setSelectedVendor(null);
+              setVendorSearch('');
+            } else {
+              setParam({ mapped: next, emp_id: null, emp_name: null, emp_email: null, emp_sub: null });
+              setSelectedVendor(null);
+              setVendorSearch('');
+            }
+            setSelectedIds(new Set());
+          }}>
+            <SelectTrigger className="w-[140px]"><SelectValue placeholder="Mode" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Assets</SelectItem>
+              <SelectItem value="employee">Employee</SelectItem>
+              <SelectItem value="unmapped">Vendor Pool</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Employee combobox — visible only in employee mode */}
+          {isAdmin && isMappedFilter === 'employee' && (
+            <Popover open={employeeComboOpen} onOpenChange={(open) => { setEmployeeComboOpen(open); if (!open) setEmployeeSearch(''); }}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" role="combobox" className="w-[180px] justify-between font-normal">
+                  <span className={selectedEmployee ? '' : 'text-muted-foreground'}>
+                    {selectedEmployee ? selectedEmployee.name : 'Select employee'}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0" align="start">
+                <Command shouldFilter={false}>
+                  <CommandInput placeholder="Search by name or email..." value={employeeSearch} onValueChange={setEmployeeSearch} />
+                  <CommandList>
+                    {employeeLoading && (
+                      <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading...
+                      </div>
+                    )}
+                    {!employeeLoading && employeeOptions.length === 0 && <CommandEmpty>No employees found.</CommandEmpty>}
+                    {employeeOptions.length > 0 && (
+                      <CommandGroup>
+                        {employeeOptions.map((emp) => (
+                          <CommandItem key={emp.id} value={emp.id} onSelect={() => { selectEmployee(emp); setEmployeeComboOpen(false); }}>
+                            <Check className={`mr-2 h-4 w-4 shrink-0 ${selectedEmployee?.id === emp.id ? 'opacity-100' : 'opacity-0'}`} />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium">{emp.name}</p>
+                              <p className="text-xs text-muted-foreground truncate">{emp.email}</p>
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          )}
+
+          {/* Vendor combobox — visible only in vendor/unmapped mode */}
+          {isAdmin && isMappedFilter === 'unmapped' && (
+            <Popover open={vendorComboOpen} onOpenChange={(open) => { setVendorComboOpen(open); if (!open) setVendorSearch(''); }}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" role="combobox" className="w-[180px] justify-between font-normal">
+                  <span className={selectedVendor ? '' : 'text-muted-foreground'}>
+                    {selectedVendor ? selectedVendor.name : 'Select vendor'}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0" align="start">
+                <Command shouldFilter={false}>
+                  <CommandInput placeholder="Search by name or code..." value={vendorSearch} onValueChange={setVendorSearch} />
+                  <CommandList>
+                    {filteredVendors.length === 0 && <CommandEmpty>{vendorSearch.length === 0 ? 'No vendors available.' : 'No vendors found.'}</CommandEmpty>}
+                    {filteredVendors.length > 0 && (
+                      <CommandGroup>
+                        {filteredVendors.map((v) => (
+                          <CommandItem key={v.id} value={v.id} onSelect={() => { setSelectedVendor(v); setVendorSearch(''); setVendorComboOpen(false); }}>
+                            <Check className={`mr-2 h-4 w-4 shrink-0 ${selectedVendor?.id === v.id ? 'opacity-100' : 'opacity-0'}`} />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium">{v.name}</p>
+                              <p className="text-xs text-muted-foreground">{v.code}</p>
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          )}
+        </div>
+
+        {/* Row 2: Status · Location · Loc. Admin · Columns */}
+        <div className="flex flex-wrap gap-2">
+          {/* Status */}
           <Select value={statusFilter} onValueChange={(v) => setParam({ status: v })}>
             <SelectTrigger className="w-[140px]"><Filter className="mr-1 h-3 w-3" /><SelectValue placeholder="Status" /></SelectTrigger>
             <SelectContent>
@@ -830,34 +1008,97 @@ export default function AssetsPage() {
               <SelectItem value="missing">Missing</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={categoryFilter} onValueChange={(v) => setParam({ category: v })}>
-            <SelectTrigger className="w-[140px]"><SelectValue placeholder="Category" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Categories</SelectItem>
-              {categories.map((c) => <SelectItem key={c.code} value={c.code}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={isMappedFilter} onValueChange={(v) => {
-            const next = v as 'all' | 'mapped' | 'unmapped';
-            if (next === 'unmapped') {
-              setParam({ mapped: next, emp_id: null, emp_name: null, emp_email: null });
-              setEmployeeSearch('');
-              setShowEmployeeDropdown(false);
-            } else {
-              setParam({ mapped: next });
-              setSelectedVendor(null);
-              setVendorSearch('');
-              setShowVendorDropdown(false);
-            }
-            setSelectedIds(new Set());
-          }}>
-            <SelectTrigger className="w-[140px]"><SelectValue placeholder="Mapping" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Assets</SelectItem>
-              <SelectItem value="mapped">Employee Assigned</SelectItem>
-              <SelectItem value="unmapped">Vendor Pool</SelectItem>
-            </SelectContent>
-          </Select>
+
+          {/* Location */}
+          <Popover open={locationComboOpen} onOpenChange={(open) => { setLocationComboOpen(open); if (!open) setLocationSearch(''); }}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" role="combobox" className="w-[160px] justify-between font-normal">
+                <span className={locationIdFilter ? '' : 'text-muted-foreground'}>
+                  {locationIdFilter ? locationFilterName || 'Location' : 'Location'}
+                </span>
+                <div className="flex items-center gap-1 ml-2 shrink-0">
+                  {locationIdFilter && (
+                    <span role="button" tabIndex={0} className="rounded-full hover:bg-muted p-0.5"
+                      onClick={(e) => { e.stopPropagation(); clearLocation(); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); clearLocation(); } }}>
+                      <X className="h-3 w-3" />
+                    </span>
+                  )}
+                  <ChevronsUpDown className="h-4 w-4 opacity-50" />
+                </div>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[280px] p-0" align="start">
+              <Command shouldFilter={false}>
+                <CommandInput placeholder="Search location..." value={locationSearch} onValueChange={setLocationSearch} />
+                <CommandList>
+                  {locationLoading && <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading...</div>}
+                  {!locationLoading && locationOptions.length === 0 && <CommandEmpty>No locations found.</CommandEmpty>}
+                  {locationOptions.length > 0 && (
+                    <CommandGroup>
+                      {locationOptions.map((loc) => (
+                        <CommandItem key={loc.id} value={loc.id} onSelect={() => selectLocation(loc)}>
+                          <Check className={`mr-2 h-4 w-4 shrink-0 ${locationIdFilter === loc.id ? 'opacity-100' : 'opacity-0'}`} />
+                          <div className="min-w-0">
+                            <p className="text-sm">{loc.name}</p>
+                            {loc.location_type && <p className="text-xs text-muted-foreground">{loc.location_type.name}</p>}
+                          </div>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+
+          {/* Location Admin — super_admin only */}
+          {isSuperAdmin && (
+            <Popover open={locAdminComboOpen} onOpenChange={(open) => { setLocAdminComboOpen(open); if (!open) setLocAdminSearch(''); }}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" role="combobox" className="w-[160px] justify-between font-normal">
+                  <span className={locationAdminIdFilter ? '' : 'text-muted-foreground'}>
+                    {locationAdminIdFilter ? locationAdminFilterName || 'Loc. Admin' : 'Loc. Admin'}
+                  </span>
+                  <div className="flex items-center gap-1 ml-2 shrink-0">
+                    {locationAdminIdFilter && (
+                      <span role="button" tabIndex={0} className="rounded-full hover:bg-muted p-0.5"
+                        onClick={(e) => { e.stopPropagation(); clearLocAdmin(); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); clearLocAdmin(); } }}>
+                        <X className="h-3 w-3" />
+                      </span>
+                    )}
+                    <ChevronsUpDown className="h-4 w-4 opacity-50" />
+                  </div>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0" align="start">
+                <Command shouldFilter={false}>
+                  <CommandInput placeholder="Search location admin..." value={locAdminSearch} onValueChange={setLocAdminSearch} />
+                  <CommandList>
+                    {locAdminLoading && <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading...</div>}
+                    {!locAdminLoading && locAdminOptions.length === 0 && <CommandEmpty>No location admins found.</CommandEmpty>}
+                    {locAdminOptions.length > 0 && (
+                      <CommandGroup>
+                        {locAdminOptions.map((admin) => (
+                          <CommandItem key={admin.id} value={admin.id} onSelect={() => selectLocAdmin(admin)}>
+                            <Check className={`mr-2 h-4 w-4 shrink-0 ${locationAdminIdFilter === admin.id ? 'opacity-100' : 'opacity-0'}`} />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium">{admin.name}</p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {admin.locations.map((l) => l.name).join(', ') || admin.email}
+                              </p>
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          )}
+
           <ColumnSelector visibleColumns={visibleColumns} onChange={setVisibleColumns} />
         </div>
       </div>
@@ -870,7 +1111,7 @@ export default function AssetsPage() {
             <Card key={asset.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/assets/${asset.id}`)}>
               <CardContent className="p-3">
                 <div className="flex items-start gap-2">
-                  {(canSendVerification && asset.assignedTo || canSendVendor && !asset.assignedTo && !asset.vendorRequestStatus) && (
+                  {(canSendVerification && asset.assignedTo || canSendVendor && !asset.assignedTo && !asset.vendorRequestStatus || canBulkMapSelect && !asset.vendorRequestStatus) && (
                     <Checkbox
                       checked={selectedIds.has(asset.id)}
                       onCheckedChange={() => toggleSelect(asset.id)}
@@ -911,6 +1152,17 @@ export default function AssetsPage() {
                       </Button>
                     )
                   )}
+                  {isAdmin && asset.status === 'missing' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 h-8 text-xs gap-1 text-green-700 border-green-300 hover:bg-green-50"
+                      disabled={markFoundMutation.isPending}
+                      onClick={(e) => { e.stopPropagation(); markFoundMutation.mutate(asset.id); }}
+                    >
+                      <Check className="h-3 w-3" /> Mark Found
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -931,6 +1183,7 @@ export default function AssetsPage() {
                             : selectableOnPage.length > 0 && selectedIds.size === selectableOnPage.length
                         }
                         onCheckedChange={canSendVendor ? toggleSelectAllUnmapped : toggleSelectAll}
+                        aria-label="Select all"
                       />
                     </TableHead>
                   )}
@@ -948,7 +1201,7 @@ export default function AssetsPage() {
                   <TableRow key={asset.id} className={`cursor-pointer hover:bg-muted/50 ${vendorRowBg}`} onClick={() => navigate(`/assets/${asset.id}`)}>
                     {showCheckboxes && (
                       <TableCell>
-                        {(canSendVerification && asset.assignedTo || canSendVendor && !asset.assignedTo && !asset.vendorRequestStatus) && (
+                        {(canSendVerification && asset.assignedTo || canSendVendor && !asset.assignedTo && !asset.vendorRequestStatus || canBulkMapSelect && !asset.vendorRequestStatus) && (
                           <Checkbox
                             checked={selectedIds.has(asset.id)}
                             onCheckedChange={() => toggleSelect(asset.id)}
@@ -1012,6 +1265,19 @@ export default function AssetsPage() {
                     <TableCell className="text-xs" onClick={(e) => e.stopPropagation()}>
                       <WorkflowCell asset={asset} />
                     </TableCell>
+                    {isAdmin && asset.status === 'missing' && (
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs gap-1 text-green-700 hover:text-green-800 hover:bg-green-50"
+                          disabled={markFoundMutation.isPending}
+                          onClick={() => markFoundMutation.mutate(asset.id)}
+                        >
+                          <Check className="h-3 w-3" /> Mark Found
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                   );
                 })}
@@ -1242,6 +1508,102 @@ export default function AssetsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Bulk map employee dialog */}
+      <Dialog open={bulkMapOpen} onOpenChange={(open) => { if (!open) { setBulkMapOpen(false); setBulkMapConflict(null); setBulkMapEmployee(null); setBulkMapSearch(''); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5" /> Map Assets to Employee
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{selectedIds.size} asset(s)</span> will be assigned to the chosen employee.
+              Assets in active employee verification requests may require explicit reassignment.
+            </p>
+
+            <Popover open={bulkMapComboOpen} onOpenChange={(open) => { setBulkMapComboOpen(open); if (!open) setBulkMapSearch(''); }}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
+                  <span className={bulkMapEmployee ? '' : 'text-muted-foreground'}>
+                    {bulkMapEmployee ? bulkMapEmployee.name : 'Select employee...'}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0" align="start">
+                <Command shouldFilter={false}>
+                  <CommandInput placeholder="Search by name or email..." value={bulkMapSearch} onValueChange={setBulkMapSearch} />
+                  <CommandList>
+                    {bulkMapSearchLoading && (
+                      <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Searching...
+                      </div>
+                    )}
+                    {!bulkMapSearchLoading && bulkMapSearch.length < 2 && <CommandEmpty>Type at least 2 characters to search.</CommandEmpty>}
+                    {!bulkMapSearchLoading && bulkMapSearch.length >= 2 && bulkMapOptions.length === 0 && <CommandEmpty>No employees found.</CommandEmpty>}
+                    {bulkMapOptions.length > 0 && (
+                      <CommandGroup>
+                        {bulkMapOptions.map((emp) => (
+                          <CommandItem key={emp.id} value={emp.id} onSelect={() => { setBulkMapEmployee(emp); setBulkMapComboOpen(false); setBulkMapSearch(''); setBulkMapConflict(null); }}>
+                            <Check className={`mr-2 h-4 w-4 shrink-0 ${bulkMapEmployee?.id === emp.id ? 'opacity-100' : 'opacity-0'}`} />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium">{emp.name}</p>
+                              <p className="text-xs text-muted-foreground truncate">{emp.email}</p>
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+
+            {bulkMapEmployee && (
+              <p className="text-xs text-muted-foreground">
+                Assigning to: <span className="font-medium text-foreground">{bulkMapEmployee.name}</span> · {bulkMapEmployee.email}
+              </p>
+            )}
+
+            {bulkMapConflict && (
+              <div className="rounded-md border border-orange-300 bg-orange-50 p-3 space-y-2">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-orange-600 mt-0.5 shrink-0" />
+                  <div className="text-sm text-orange-800">
+                    <p className="font-medium">{bulkMapConflict.conflicts.length} asset(s) in active verification requests</p>
+                    <ul className="text-xs mt-1 space-y-0.5 list-disc list-inside">
+                      {bulkMapConflict.conflicts.slice(0, 5).map((c) => (
+                        <li key={c.asset_id}><span className="font-mono">{c.asset_id}</span> — {c.request_reference} ({c.employee_name})</li>
+                      ))}
+                      {bulkMapConflict.conflicts.length > 5 && <li>…and {bulkMapConflict.conflicts.length - 5} more</li>}
+                    </ul>
+                    <p className="text-xs mt-1.5">Reassigning will interrupt those verification requests.</p>
+                  </div>
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button size="sm" variant="outline" onClick={() => setBulkMapConflict(null)}>Cancel</Button>
+                  <Button size="sm" variant="destructive" disabled={bulkMapLoading} onClick={() => confirmBulkMap(true)}>
+                    {bulkMapLoading && <Loader2 className="h-3 w-3 animate-spin mr-1" />}Map Anyway
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {!bulkMapConflict && (
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setBulkMapOpen(false)}>Cancel</Button>
+              <Button disabled={!bulkMapEmployee || bulkMapLoading} onClick={() => confirmBulkMap(false)}>
+                {bulkMapLoading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />}
+                Map {selectedIds.size} Asset{selectedIds.size !== 1 ? 's' : ''}
+              </Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
