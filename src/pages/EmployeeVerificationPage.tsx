@@ -30,7 +30,7 @@ interface VerificationAsset {
   serialNumber: string;
   categoryName: string;
   locationName: string;
-  status: 'pending' | 'verified' | 'issue';
+  status: 'pending' | 'verified' | 'issue' | 'missing';
   note: string;
   issueType: string;
   photos: VerificationAssetPhoto[];
@@ -158,8 +158,10 @@ const status = requestData.status || '';
     }
   }, [requestData, fetchError]);
 
-  const handleAssetStatus = (id: string, status: 'verified' | 'issue') => {
-    setAssets((prev) => prev.map((a) => a.id === id ? { ...a, status } : a));
+  const handleAssetStatus = (id: string, status: 'verified' | 'issue' | 'missing') => {
+    setAssets((prev) => prev.map((a) =>
+      a.id === id ? { ...a, status, issueType: (status === 'verified' || status === 'missing') ? '' : a.issueType } : a
+    ));
   };
 
   const handleIssueNote = (id: string, note: string) => {
@@ -249,10 +251,10 @@ const status = requestData.status || '';
     : assets;
   const allReviewed = editableAssets.every((a) => a.status !== 'pending');
   const verifiedCount = assets.filter((a) => a.status === 'verified').length;
-  const issueCount = assets.filter((a) => a.status === 'issue').length;
+  const issueCount = assets.filter((a) => a.status === 'issue' || a.status === 'missing').length;
   const approvedCount = assets.filter((a) => a.adminReviewStatus === 'approved').length;
   const missingCount = assets.filter((a) => a.adminReviewStatus === 'missing').length;
-  // All assets with status=issue must have an issue type selected before continuing
+  // 'issue' assets need an explicit issue type; 'missing' auto-maps to missing, no selection needed
   const allIssueTyped = assets.every((a) => a.status !== 'issue' || !!a.issueType);
 
   const submitMutation = useMutation({
@@ -267,7 +269,7 @@ const status = requestData.status || '';
         request_asset_id: a.id,
         response: a.status === 'verified' ? 'verified' : 'issue_reported',
         remarks: a.note || undefined,
-        issue_type: a.issueType || undefined,
+        issue_type: a.status === 'missing' ? 'missing' : (a.issueType || undefined),
         issue_description: a.note || undefined,
       }));
       return verificationService.submitPublicVerification(publicToken, {
@@ -474,7 +476,7 @@ const status = requestData.status || '';
                   // Treat superseded correction assets like locked/read-only
                   const isLocked = isApproved || isMissing || isSupersededAsset;
                   return (
-                  <Card key={asset.id} className={`border-2 transition-colors ${isMissing ? 'border-destructive/40 bg-destructive/5 opacity-80' : isApproved ? 'border-success/40 bg-success/5 opacity-80' : isSupersededAsset ? 'border-border bg-muted/20 opacity-75' : asset.status === 'verified' ? 'border-success/40 bg-success/5' : asset.status === 'issue' ? 'border-destructive/40 bg-destructive/5' : needsCorrection ? 'border-warning/40 bg-warning/5' : 'border-border'}`}>
+                  <Card key={asset.id} className={`border-2 transition-colors ${isMissing ? 'border-destructive/40 bg-destructive/5 opacity-80' : isApproved ? 'border-success/40 bg-success/5 opacity-80' : isSupersededAsset ? 'border-border bg-muted/20 opacity-75' : asset.status === 'verified' ? 'border-success/40 bg-success/5' : asset.status === 'issue' ? 'border-destructive/40 bg-destructive/5' : asset.status === 'missing' ? 'border-warning/40 bg-warning/5' : needsCorrection ? 'border-warning/40 bg-warning/5' : 'border-border'}`}>
                     <CardContent className="p-4 space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -500,10 +502,12 @@ const status = requestData.status || '';
                           <div className="text-xs font-medium px-2 py-1 rounded bg-warning/10 text-warning flex items-center gap-1">
                             <AlertCircle className="h-3 w-3" /> Needs Correction
                           </div>
-                        ) : asset.status !== 'pending' ? (
-                          <div className={`text-xs font-medium px-2 py-1 rounded ${asset.status === 'verified' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
-                            {asset.status === 'verified' ? 'Verified' : 'Issue'}
-                          </div>
+                        ) : asset.status === 'verified' ? (
+                          <div className="text-xs font-medium px-2 py-1 rounded bg-success/10 text-success">Verified</div>
+                        ) : asset.status === 'issue' ? (
+                          <div className="text-xs font-medium px-2 py-1 rounded bg-destructive/10 text-destructive">Issue</div>
+                        ) : asset.status === 'missing' ? (
+                          <div className="text-xs font-medium px-2 py-1 rounded bg-warning/10 text-warning">Not Found</div>
                         ) : null}
                       </div>
                       <div className="text-xs text-muted-foreground">
@@ -526,26 +530,35 @@ const status = requestData.status || '';
                         <p className="text-xs text-muted-foreground italic">This asset has been resolved in a newer verification request and is part of the historical record.</p>
                       ) : (
                       <>
-                      <div className="flex gap-2">
+                      <div className="flex flex-col gap-2">
                         <Button
                           variant={asset.status === 'verified' ? 'default' : 'outline'}
                           size="sm"
-                          className="flex-1 h-9"
+                          className="w-full h-9 justify-start"
                           onClick={() => handleAssetStatus(asset.id, 'verified')}
                         >
-                          <Check className="mr-1 h-3 w-3" /> Verified
+                          <Check className="mr-2 h-3 w-3 shrink-0" /> Verified
                         </Button>
                         <Button
                           variant={asset.status === 'issue' ? 'destructive' : 'outline'}
                           size="sm"
-                          className="flex-1 h-9"
+                          className="w-full h-9 justify-start"
                           onClick={() => handleAssetStatus(asset.id, 'issue')}
                         >
-                          <AlertCircle className="mr-1 h-3 w-3" /> Report Issue
+                          <AlertCircle className="mr-2 h-3 w-3 shrink-0" /> Have It, But Need to Report Issue
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className={`w-full h-9 justify-start ${asset.status === 'missing' ? 'bg-warning/10 border-warning/60 text-warning hover:bg-warning/20' : ''}`}
+                          onClick={() => handleAssetStatus(asset.id, 'missing')}
+                        >
+                          <XCircle className="mr-2 h-3 w-3 shrink-0" /> I Don't Have This Asset
                         </Button>
                       </div>
                       {asset.status === 'issue' && (
                         <div className="space-y-2 mt-2">
+                          <p className="text-xs text-muted-foreground">Use this when you have the asset but need to report a problem.</p>
                           <Select
                             value={asset.issueType || ''}
                             onValueChange={(v) => handleIssueType(asset.id, v)}
@@ -554,10 +567,8 @@ const status = requestData.status || '';
                               <SelectValue placeholder="Select issue type *" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="missing">Missing</SelectItem>
                               <SelectItem value="damaged">Damaged</SelectItem>
                               <SelectItem value="wrong_serial">Wrong Serial Number</SelectItem>
-                              <SelectItem value="not_in_possession">Not In Possession</SelectItem>
                               <SelectItem value="other">Other</SelectItem>
                             </SelectContent>
                           </Select>
@@ -570,11 +581,24 @@ const status = requestData.status || '';
                           />
                         </div>
                       )}
+                      {asset.status === 'missing' && (
+                        <div className="space-y-2 mt-2">
+                          <p className="text-xs text-muted-foreground">Use this when the asset is not with you.</p>
+                          <Textarea
+                            placeholder="Add details (optional)..."
+                            value={asset.note}
+                            onChange={(e) => handleIssueNote(asset.id, e.target.value)}
+                            rows={2}
+                            className="text-sm"
+                          />
+                        </div>
+                      )}
                       </>
                       )}
 
-                      {/* Photo upload — up to 3 photos per asset */}
-                      <div className="space-y-1.5 mt-2 pt-2 border-t">
+                      {/* Photos: always show thumbnails (with remove) so employee isn't stuck with hidden uploaded photos;
+                          only hide the upload control when employee has chosen "I Don't Have This Asset" */}
+                      {(asset.photos.length > 0 || asset.status !== 'missing') && <div className="space-y-1.5 mt-2 pt-2 border-t">
                         <div className="flex items-center justify-between">
                           <span className="flex items-center gap-1 text-xs text-muted-foreground">
                             <Camera className="h-3 w-3" />
@@ -611,7 +635,7 @@ const status = requestData.status || '';
                             ))}
                           </div>
                         )}
-                        {asset.photos.length < 3 && !isLocked && (
+                        {asset.photos.length < 3 && !isLocked && asset.status !== 'missing' && (
                           <label className="cursor-pointer">
                             <input
                               type="file"
@@ -631,7 +655,7 @@ const status = requestData.status || '';
                             </span>
                           </label>
                         )}
-                      </div>
+                      </div>}
                     </CardContent>
                   </Card>
                   );
