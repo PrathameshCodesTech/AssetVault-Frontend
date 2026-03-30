@@ -8,9 +8,10 @@ import { Camera, Keyboard, QrCode, Printer, ScanLine, AlertCircle, Loader2, Pack
 import { QRCodeSVG } from 'qrcode.react';
 import { useToast } from '@/hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
-import { scanAsset, fetchAssets, generateQr } from '@/services/assetService';
+import { scanAsset, scanAssetByCode, fetchAssets, generateQr } from '@/services/assetService';
 import { vendorGlobalScan } from '@/services/vendorService';
 import { useAuth } from '@/contexts/AuthContext';
+import { normalizeScannedCode } from '@/lib/scanUtils';
 
 export default function ScanPage() {
   const { user } = useAuth();
@@ -46,8 +47,17 @@ export default function ScanPage() {
     setCameraError('');
     setScanning(true);
     try {
-      const { Html5Qrcode } = await import('html5-qrcode');
-      const scanner = new Html5Qrcode('scanner-region');
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
+      const scanner = new Html5Qrcode('scanner-region', {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+        ],
+        verbose: false,
+      });
       html5QrRef.current = scanner;
       await scanner.start(
         { facingMode: 'environment' },
@@ -65,11 +75,11 @@ export default function ScanPage() {
 
   useEffect(() => { return () => { safeStop(); }; }, []);
 
-  const handleVendorScanResult = async (code: string) => {
+  const handleVendorScanResult = async (raw: string) => {
     setSearchLoading(true);
     try {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code);
-      const result = await vendorGlobalScan(isUuid ? { qr_uid: code } : { asset_id: code });
+      const { type, value } = normalizeScannedCode(raw);
+      const result = await vendorGlobalScan(type === 'qr_uid' ? { qr_uid: value } : { asset_id: value });
 
       if (result.matched && result.in_package && result.request_id && result.request_asset_id) {
         toast({ title: 'Asset Found', description: `${result.asset_id} — ${result.asset_name}` });
@@ -109,15 +119,18 @@ export default function ScanPage() {
     setSearchLoading(false);
   };
 
-  const handleScanResult = async (code: string) => {
-    if (isVendorOnly) { return handleVendorScanResult(code); }
+  const handleScanResult = async (raw: string) => {
+    if (isVendorOnly) { return handleVendorScanResult(raw); }
 
     setSearchLoading(true);
+    const { type, value } = normalizeScannedCode(raw);
     try {
-      const asset = await scanAsset(code);
+      // qr_uid → UUID endpoint; code (asset_id / barcode / tag_number) → generic lookup
+      const asset = type === 'qr_uid' ? await scanAsset(value) : await scanAssetByCode(value);
       if (asset?.id) {
         toast({ title: 'Asset Found!', description: asset.name || asset.assetId });
         navigate(`/assets/${asset.id}`);
+        setSearchLoading(false);
         return;
       }
     } catch { /* fall through to search */ }
@@ -167,7 +180,7 @@ export default function ScanPage() {
       {isVendorOnly && (
         <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
           <Package className="h-4 w-4 mt-0.5 flex-shrink-0" />
-          <span>Scan an asset to find it within your assigned verification requests. You can only scan assets included in your active packages.</span>
+          <span>Scan a QR code or barcode, or enter the asset ID / tag number. You can only scan assets included in your active packages.</span>
         </div>
       )}
 
@@ -211,8 +224,8 @@ export default function ScanPage() {
           <Card>
             <CardHeader><CardTitle className="text-base">Enter Code Manually</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">Enter the asset ID, serial number, or QR UID</p>
-              <Input placeholder="e.g. FAR-2021-0001 or SN-123456" value={manualCode} onChange={(e) => setManualCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()} className="h-12 text-base" />
+              <p className="text-xs text-muted-foreground">Enter the asset ID, tag number / barcode, or QR UID</p>
+              <Input placeholder="e.g. FAR-2021-0001, C08466, or QR UID" value={manualCode} onChange={(e) => setManualCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()} className="h-12 text-base" />
               <Button onClick={handleManualSearch} disabled={searchLoading} className="w-full h-12">
                 {searchLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} Search Asset
               </Button>

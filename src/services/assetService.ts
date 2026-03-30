@@ -88,6 +88,11 @@ export async function scanAsset(qrUid: string) {
   return data;
 }
 
+export async function scanAssetByCode(code: string) {
+  const { data } = await api.get(`/assets/scan-lookup/${encodeURIComponent(code)}/`);
+  return data;
+}
+
 export async function fetchLookups() {
   const { data } = await api.get("/assets/lookups/");
   return data;

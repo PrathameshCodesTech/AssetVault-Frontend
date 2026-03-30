@@ -20,6 +20,7 @@ import {
 } from '@/services/vendorService';
 import { Input } from '@/components/ui/input';
 import { ArrowLeft, Camera, CheckCircle, AlertTriangle, Clock, Upload, Send, ScanLine, XCircle } from 'lucide-react';
+import { normalizeScannedCode } from '@/lib/scanUtils';
 
 function getErrMsg(err: unknown): string {
   const e = err as { response?: { data?: { detail?: string } | string } };
@@ -235,8 +236,8 @@ export default function VendorRequestDetailPage() {
     setScanning(true);
     setScanResult(null);
     try {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query);
-      const result = await scanVendorRequestAsset(id, isUuid ? { qr_uid: query } : { asset_id: query });
+      const { type, value } = normalizeScannedCode(query);
+      const result = await scanVendorRequestAsset(id, type === 'qr_uid' ? { qr_uid: value } : { asset_id: value });
       setScanResult(result);
       if (result.in_package && result.request_asset_id) {
         setHighlightedAssetId(result.request_asset_id);
@@ -349,7 +350,7 @@ export default function VendorRequestDetailPage() {
           <CardContent className="space-y-2">
             <div className="flex gap-2">
               <Input
-                placeholder="Enter Asset ID or QR code..."
+                placeholder="Enter Asset ID, tag number, or QR code..."
                 value={scanInput}
                 onChange={(e) => { setScanInput(e.target.value); setScanResult(null); }}
                 onKeyDown={(e) => e.key === 'Enter' && handleScan()}

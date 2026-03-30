@@ -226,7 +226,7 @@ export async function submitVendorRequest(id: string): Promise<VendorVerificatio
 
 export async function scanVendorRequestAsset(
   requestId: string,
-  params: { qr_uid?: string; asset_id?: string }
+  params: { qr_uid?: string; asset_id?: string; tag_number?: string }
 ): Promise<{ in_package: boolean; request_asset_id?: string; asset_id?: string; asset_name?: string; response_status?: string; admin_decision?: string; detail?: string }> {
   const { data } = await api.get(`/vendor/requests/${requestId}/scan/`, { params });
   return data;
@@ -246,7 +246,7 @@ export interface VendorGlobalScanResult {
 }
 
 export async function vendorGlobalScan(
-  params: { qr_uid?: string; asset_id?: string }
+  params: { qr_uid?: string; asset_id?: string; tag_number?: string }
 ): Promise<VendorGlobalScanResult> {
   const { data } = await api.post('/vendor/requests/scan/', params);
   return data;
