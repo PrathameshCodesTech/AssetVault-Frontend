@@ -14,7 +14,8 @@ export default function MobileBottomNav() {
   const tabs = isVendorOnly
     ? [
         { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
-        { label: 'My Requests', icon: ClipboardList, path: '/vendor/requests' },
+        { label: 'Requests', icon: ClipboardList, path: '/vendor/requests' },
+        { label: 'Scan', icon: ScanLine, path: '/scan' },
         { label: 'Profile', icon: UserCircle, path: '/profile' },
       ]
     : [
