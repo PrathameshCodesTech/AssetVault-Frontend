@@ -15,6 +15,7 @@ export default function DesktopSidebar() {
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const role = user?.role;
+  const isEmbedded = sessionStorage.getItem('embedded_source') === 'logicon';
   const isAdminRole = role === 'super_admin' || role === 'location_admin';
   const isVendorUser = user?.permissions?.includes('vendor.respond') ?? false;
   const isVendorOnly = isVendorUser && !isAdminRole;
@@ -143,17 +144,19 @@ export default function DesktopSidebar() {
 
       <SidebarFooter className="border-t border-sidebar-border p-3">
         {!collapsed && user && (
-          <div className="mb-2 text-xs text-sidebar-foreground/80 font-body">
+          <div className={`text-xs text-sidebar-foreground/80 font-body ${!isEmbedded ? 'mb-2' : ''}`}>
             <p className="font-medium">{user.name}</p>
             <p className="capitalize text-sidebar-foreground/50">{(user.role ?? '').replace(/_/g, ' ') || 'User'}</p>
           </div>
         )}
-        <button
-          onClick={logout}
-          className="w-full rounded-md bg-sidebar-accent px-3 py-1.5 text-xs font-medium text-sidebar-foreground hover:bg-primary hover:text-primary-foreground transition-colors font-body"
-        >
-          {collapsed ? '⏻' : 'Logout'}
-        </button>
+        {!isEmbedded && (
+          <button
+            onClick={logout}
+            className="w-full rounded-md bg-sidebar-accent px-3 py-1.5 text-xs font-medium text-sidebar-foreground hover:bg-primary hover:text-primary-foreground transition-colors font-body"
+          >
+            {collapsed ? '⏻' : 'Logout'}
+          </button>
+        )}
       </SidebarFooter>
     </Sidebar>
   );

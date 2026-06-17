@@ -26,6 +26,7 @@ export default function LogiconSsoPage() {
     void (async () => {
       const result = await loginWithLogiconToken(token);
       if (result.success) {
+        sessionStorage.setItem('embedded_source', 'logicon');
         navigate('/', { replace: true });
       } else {
         setError(result.error ?? 'Unable to open Asset Vault from Logicon.');
