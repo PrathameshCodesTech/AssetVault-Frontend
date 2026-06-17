@@ -94,7 +94,7 @@ export default function ReconciliationPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-lg mx-auto space-y-4">
+    <div className="p-4 md:p-6 space-y-4">
       <h1 className="text-xl font-bold">Reconciliation</h1>
 
       {!['success', 'not_found'].includes(step) && (

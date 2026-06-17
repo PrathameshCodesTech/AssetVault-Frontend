@@ -174,7 +174,7 @@ export default function ScanPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-2xl mx-auto space-y-4">
+    <div className="p-4 md:p-6 space-y-4">
       <h1 className="text-xl font-bold md:text-2xl">Scan & QR</h1>
 
       {isVendorOnly && (

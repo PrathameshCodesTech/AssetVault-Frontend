@@ -329,7 +329,7 @@ export default function AssetRegisterPage() {
   );
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto">
+    <div className="p-4 md:p-6">
       <Button variant="ghost" onClick={() => navigate(-1)} className="mb-4 gap-1">
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>

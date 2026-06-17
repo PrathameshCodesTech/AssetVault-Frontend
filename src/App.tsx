@@ -7,6 +7,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppLayout from "@/components/layout/AppLayout";
 import LoginPage from "@/pages/LoginPage";
+import LogiconSsoPage from "@/pages/LogiconSsoPage";
 import DashboardPage from "@/pages/DashboardPage";
 import AssetsPage from "@/pages/AssetsPage";
 import AssetDetailPage from "@/pages/AssetDetailPage";
@@ -28,6 +29,7 @@ import AdminVendorsPage from "@/pages/admin/AdminVendorsPage";
 import AdminVendorRequestsPage from "@/pages/admin/AdminVendorRequestsPage";
 import VendorRequestsPage from "@/pages/vendor/VendorRequestsPage";
 import VendorRequestDetailPage from "@/pages/vendor/VendorRequestDetailPage";
+import type { UserRole } from "@/types";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,7 +37,7 @@ const queryClient = new QueryClient({
   },
 });
 
-const ProtectedLayout = ({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: any[] }) => (
+const ProtectedLayout = ({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: UserRole[] }) => (
   <ProtectedRoute allowedRoles={allowedRoles}>
     <AppLayout>{children}</AppLayout>
   </ProtectedRoute>
@@ -50,6 +52,7 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/sso/logicon" element={<LogiconSsoPage />} />
             {/* Public employee verification route -- no auth required */}
             <Route path="/verify/:publicToken" element={<EmployeeVerificationPage />} />
             <Route path="/" element={<ProtectedLayout><DashboardPage /></ProtectedLayout>} />

@@ -832,47 +832,35 @@ export default function AssetsPage() {
 
       {/* Vendor strip — admin only, unmapped filter active */}
       {showVendorPanel && selectedVendor && (
-        <div className="border border-blue-200 bg-blue-50/50 rounded-lg px-3 py-2 space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
-              <Truck className="h-4 w-4 text-blue-600 shrink-0" />
-              <span className="text-sm font-medium truncate">{selectedVendor.name}</span>
-              <span className="text-xs text-muted-foreground hidden sm:inline">{selectedVendor.code}</span>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700"
-                onClick={() => navigate(`/admin/vendor-requests?vendor_id=${selectedVendor.id}`)}
-              >
-                View Requests
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 p-0"
-                onClick={() => { setSelectedVendor(null); setVendorSearch(''); }}
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+        <div className="flex items-center gap-3 border-b pb-3">
+          <div className="h-7 w-7 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shrink-0">
+            <Truck className="h-3.5 w-3.5 text-white" />
           </div>
-          <div className="flex gap-1">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <span className="text-sm font-medium truncate bg-gradient-to-r from-blue-500 to-blue-600 bg-clip-text text-transparent">{selectedVendor.name}</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline truncate">{selectedVendor.code}</span>
+          </div>
+          <div className="flex items-center rounded-md bg-muted p-0.5 gap-0.5 shrink-0">
             <button
               onClick={() => switchVendorSubview('available')}
-              className={`flex-1 text-xs py-1 rounded-md border transition-colors ${vendorSubview === 'available' ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-muted-foreground border-muted hover:bg-muted'}`}
+              className={`px-3 py-1 text-xs font-medium rounded transition-all ${vendorSubview === 'available' ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >Available</button>
             <button
               onClick={() => switchVendorSubview('reserved')}
-              className={`flex-1 text-xs py-1 rounded-md border transition-colors ${vendorSubview === 'reserved' ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-muted-foreground border-muted hover:bg-muted'}`}
+              className={`px-3 py-1 text-xs font-medium rounded transition-all ${vendorSubview === 'reserved' ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
             >Reserved</button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {vendorSubview === 'available'
-              ? (selectedIds.size > 0 ? `${selectedIds.size} asset(s) selected. ` : '') + 'Available assets are unmapped and not yet assigned to any vendor request.'
-              : `Showing assets currently reserved for ${selectedVendor.name}.`}
-          </p>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700 px-2 shrink-0"
+            onClick={() => navigate(`/admin/vendor-requests?vendor_id=${selectedVendor.id}`)}
+          >
+            View Requests
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => { setSelectedVendor(null); setVendorSearch(''); }} className="h-7 w-7 p-0 shrink-0">
+            <X className="h-3.5 w-3.5" />
+          </Button>
         </div>
       )}
 

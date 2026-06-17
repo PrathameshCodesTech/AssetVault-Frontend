@@ -42,6 +42,19 @@ export async function verifyOtp(
   return data;
 }
 
+export async function loginWithPassword(
+  email: string,
+  password: string,
+): Promise<VerifyOtpResponse> {
+  const { data } = await api.post("/auth/login", { email, password });
+  return data;
+}
+
+export async function consumeLogiconSso(token: string): Promise<VerifyOtpResponse> {
+  const { data } = await api.post("/auth/logicon-sso", { token });
+  return data;
+}
+
 export async function fetchMe(): Promise<BackendUser> {
   const { data } = await api.get("/auth/me");
   return data;

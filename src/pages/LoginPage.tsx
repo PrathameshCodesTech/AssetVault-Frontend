@@ -1,102 +1,48 @@
-import { useState, useRef, useEffect } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
+import { ArrowRight, Eye, EyeOff, Loader2, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
+import { motion } from 'framer-motion';
+
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ShieldCheck, Mail, ArrowRight, Loader2 } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Input } from '@/components/ui/input';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginPage() {
-  const [step, setStep] = useState<'email' | 'otp'>('email');
   const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState('');
-  const [challengeId, setChallengeId] = useState('');
-  const [debugOtp, setDebugOtp] = useState('');
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  const { sendOtp, verifyOtp, isAuthenticated } = useAuth();
+  const { loginWithPassword, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const { toast } = useToast();
 
   useEffect(() => {
     if (isAuthenticated) navigate('/', { replace: true });
   }, [isAuthenticated, navigate]);
 
-  useEffect(() => {
-    if (countdown > 0) {
-      const t = setTimeout(() => setCountdown(countdown - 1), 1000);
-      return () => clearTimeout(t);
-    }
-  }, [countdown]);
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
 
-  const handleSendOtp = async () => {
-    if (!email) return;
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail || !password) {
+      setError('Enter your email and password.');
+      return;
+    }
+
     setError('');
     setIsLoading(true);
-    const result = await sendOtp(email);
+    const result = await loginWithPassword(normalizedEmail, password);
     setIsLoading(false);
-    if (result.success && result.challengeId) {
-      setChallengeId(result.challengeId);
-      if (result.debugOtp) setDebugOtp(result.debugOtp);
-      setStep('otp');
-      setCountdown(60);
-      toast({ title: 'OTP Sent', description: `Verification code sent to ${email}` });
-    } else {
-      setError(result.error || 'Failed to send OTP.');
-    }
-  };
 
-  const handleOtpChange = (index: number, value: string) => {
-    if (!/^\d*$/.test(value)) return;
-    const newOtp = [...otp];
-    newOtp[index] = value.slice(-1);
-    setOtp(newOtp);
-    if (value && index < 5) inputRefs.current[index + 1]?.focus();
-  };
-
-  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-    if (e.key === 'Enter') {
-      handleVerify();
-    }
-  };
-
-  const handleVerify = async () => {
-    const code = otp.join('');
-    if (code.length < 6) return;
-    setError('');
-    setIsLoading(true);
-    const result = await verifyOtp(email, code, challengeId);
-    setIsLoading(false);
     if (result.success) {
-      toast({ title: 'Welcome!', description: 'Authentication successful.' });
       navigate('/', { replace: true });
     } else {
-      setError(result.error || 'Invalid OTP.');
-      setOtp(['', '', '', '', '', '']);
-      inputRefs.current[0]?.focus();
+      setError(result.error || 'Invalid email or password.');
     }
   };
 
-  const handleResend = async () => {
-    if (countdown > 0) return;
-    setIsLoading(true);
-    const result = await sendOtp(email);
-    setIsLoading(false);
-    if (result.success && result.challengeId) {
-      setChallengeId(result.challengeId);
-      if (result.debugOtp) setDebugOtp(result.debugOtp);
-    }
-    setCountdown(60);
-    setOtp(['', '', '', '', '', '']);
-    toast({ title: 'OTP Resent', description: 'A new code has been sent.' });
-  };
+  const canSubmit = email.trim().length > 0 && password.length > 0 && !isLoading;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -111,72 +57,64 @@ export default function LoginPage() {
 
         <Card className="border-border shadow-lg">
           <CardHeader className="text-center">
-            <CardTitle className="text-xl font-display">{step === 'email' ? 'Sign In' : 'Verify OTP'}</CardTitle>
+            <CardTitle className="text-xl font-display">Sign In</CardTitle>
             <CardDescription className="font-body">
-              {step === 'email'
-                ? 'Enter your authorized email to get started'
-                : `Enter the 6-digit code sent to ${email}`}
+              Use your Asset Vault email and password
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <AnimatePresence mode="wait">
-              {step === 'email' ? (
-                <motion.div key="email" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="space-y-4">
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      type="email"
-                      placeholder="your.name@company.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSendOtp()}
-                      className="pl-10 h-12 font-body"
-                      autoFocus
-                    />
-                  </div>
-                   {error && <p className="text-sm text-destructive font-body">{error}</p>}
-                   <Button onClick={handleSendOtp} disabled={!email || isLoading} className="w-full h-12 text-base font-body font-semibold">
-                     {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
-                     Send OTP
-                   </Button>
-                </motion.div>
-              ) : (
-                <motion.div key="otp" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
-                  <div className="flex justify-center gap-2.5">
-                    {otp.map((digit, i) => (
-                      <Input
-                        key={i}
-                        ref={(el) => { inputRefs.current[i] = el; }}
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handleOtpChange(i, e.target.value)}
-                        onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                        className="h-14 w-12 text-center text-xl font-bold font-body border-2 focus:border-primary focus:ring-primary/20"
-                        autoFocus={i === 0}
-                      />
-                    ))}
-                  </div>
-                  {error && <p className="text-center text-sm text-destructive font-body">{error}</p>}
-                  {debugOtp && (
-                    <p className="text-center text-xs text-muted-foreground font-body">Dev OTP: <span className="font-mono font-bold">{debugOtp}</span></p>
-                  )}
-                  <Button onClick={handleVerify} disabled={otp.join('').length < 6 || isLoading} className="w-full h-12 text-base font-body font-semibold">
-                    {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Verify & Sign In
-                  </Button>
-                  <div className="flex items-center justify-between text-sm font-body">
-                    <button onClick={() => { setStep('email'); setError(''); setDebugOtp(''); }} className="text-primary hover:underline font-semibold">
-                      &larr; Change email
-                    </button>
-                    <button onClick={handleResend} disabled={countdown > 0} className={`font-semibold ${countdown > 0 ? 'text-muted-foreground' : 'text-primary hover:underline'}`}>
-                      {countdown > 0 ? `Resend in ${countdown}s` : 'Resend OTP'}
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <label htmlFor="email" className="text-sm font-medium text-foreground">
+                  Email
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="your.name@company.com"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    className="h-12 pl-10 font-body"
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label htmlFor="password" className="text-sm font-medium text-foreground">
+                  Password
+                </label>
+                <div className="relative">
+                  <LockKeyhole className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    className="h-12 pl-10 pr-10 font-body"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {error && <p className="text-sm text-destructive font-body">{error}</p>}
+
+              <Button type="submit" disabled={!canSubmit} className="h-12 w-full text-base font-body font-semibold">
+                {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
+                Sign In
+              </Button>
+            </form>
           </CardContent>
         </Card>
       </motion.div>

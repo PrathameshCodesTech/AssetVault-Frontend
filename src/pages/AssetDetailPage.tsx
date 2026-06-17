@@ -89,7 +89,7 @@ export default function AssetDetailPage() {
   const financialDetails = asset.assetDetails;
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-4xl mx-auto">
+    <div className="p-4 md:p-6 space-y-4">
       <Button variant="ghost" onClick={() => navigate(-1)} className="gap-1"><ArrowLeft className="h-4 w-4" /> Back to Assets</Button>
 
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
